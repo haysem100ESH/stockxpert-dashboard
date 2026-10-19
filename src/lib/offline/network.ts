@@ -33,8 +33,11 @@ export async function callPos(payload: unknown, mode: 'online' | 'offline') {
   try { return await supabase.rpc('process_pos_sale', { p_payload: payload, p_mode: mode }).abortSignal(controller.signal); }
   finally { clearTimeout(timer); }
 }
+let fallbackLock: Promise<unknown> = Promise.resolve();
 export async function withPosLock<T>(work: () => Promise<T>): Promise<T> {
-  // Fallback covers browsers without Web Locks; Dexie serializes local writes.
+  // Serialize this tab even where Web Locks are unavailable.
   if (navigator.locks) return navigator.locks.request('pos-sync', work);
-  return work();
+  const next = fallbackLock.then(work, work);
+  fallbackLock = next.catch(() => undefined);
+  return next;
 }

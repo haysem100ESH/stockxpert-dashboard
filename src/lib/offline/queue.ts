@@ -28,6 +28,8 @@ export async function enqueueSale(record: LocalSale, validateStock: boolean) {
 export async function settleSale(record: LocalSale, result: RpcResult) {
   const now = new Date().toISOString();
   await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, async () => {
+    const existing = await offlineDb.sales.get(record.clientTxnId);
+    if (existing?.status === 'synced' || existing?.status === 'voided') return;
     if (result.status === 'synced') {
       // Move the reservation into the snapshot atomically until server refresh.
       for (const line of record.payload.items) {
