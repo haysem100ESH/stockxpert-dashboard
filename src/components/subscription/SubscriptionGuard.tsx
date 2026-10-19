@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { AlertTriangle, Lock, Upload, CheckCircle, Loader2 } from 'lucide-react';
+import { cacheMeta, readMeta } from '@/lib/offline/db';
+import { useOfflineStatus } from '@/lib/offline/store';
 import { useToast } from '@/hooks/use-toast';
 
 interface SubscriptionGuardProps {
@@ -15,6 +17,7 @@ interface SubscriptionGuardProps {
 
 export default function SubscriptionGuard({ children, fallback }: SubscriptionGuardProps) {
   const { user, profile } = useAuth();
+  const { reachable } = useOfflineStatus();
   const { toast } = useToast();
   const [subscriptionStatus, setSubscriptionStatus] = useState<'active' | 'expiring_soon' | 'expired' | 'inactive' | 'loading'>('loading');
   const [daysRemaining, setDaysRemaining] = useState<number>(0);
@@ -28,76 +31,40 @@ export default function SubscriptionGuard({ children, fallback }: SubscriptionGu
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (user && profile?.role === 'owner') {
-      checkSubscriptionStatus();
-    } else if (profile?.role === 'staff') {
-      // Staff: check owner's subscription
-      checkStaffSubscriptionStatus();
-    } else if (profile?.role === 'developer') {
-      setSubscriptionStatus('active');
-    }
-  }, [user, profile]);
-
-  const checkSubscriptionStatus = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('pharmacy_subscriptions')
-        .select('subscription_credit, status')
-        .eq('pharmacy_owner_id', user!.id)
-        .single();
-
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error checking subscription:', error);
-        setSubscriptionStatus('expired');
-        return;
-      }
-
-      if (!data) {
-        setSubscriptionStatus('expired');
-        return;
-      }
-
-      setDaysRemaining(data.subscription_credit);
-      setSubscriptionStatus(data.status);
-    } catch (error) {
-      console.error('Error checking subscription:', error);
-      setSubscriptionStatus('expired');
-    }
-  };
-
-  const checkStaffSubscriptionStatus = async () => {
-    try {
-      if (!profile?.branch_id) {
-        setSubscriptionStatus('active');
-        return;
-      }
-      const { data: branchData } = await supabase
-        .from('pharmacy_branches')
-        .select('pharmacy_owner_id')
-        .eq('id', profile.branch_id)
-        .single();
-
-      if (!branchData?.pharmacy_owner_id) {
-        setSubscriptionStatus('active');
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('pharmacy_subscriptions')
-        .select('subscription_credit, status')
-        .eq('pharmacy_owner_id', branchData.pharmacy_owner_id)
-        .single();
-
-      if (error || !data) {
-        setSubscriptionStatus('expired');
-        return;
-      }
-      setDaysRemaining(data.subscription_credit);
-      setSubscriptionStatus(data.status);
-    } catch {
-      setSubscriptionStatus('active');
-    }
-  };
+    if (!user || !profile) { setSubscriptionStatus('expired'); return; }
+    let disposed = false;
+    const id = user.id;
+    const check = async () => {
+      setSubscriptionStatus('loading');
+      const fallback = async () => {
+        const cached = await readMeta<{ status: 'active' | 'expiring_soon' | 'expired' | 'inactive'; credit: number }>(`subscription:${id}`).catch(() => undefined);
+        if (!disposed) { setSubscriptionStatus(cached?.status ?? 'expired'); setDaysRemaining(cached?.credit ?? 0); }
+      };
+      if (profile.role === 'developer') { setSubscriptionStatus('active'); return; }
+      if (!reachable) { await fallback(); return; }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        let ownerId = id;
+        if (profile.role === 'staff') {
+          if (!profile.branch_id) { setSubscriptionStatus('expired'); return; }
+          const { data, error } = await supabase.from('pharmacy_branches').select('pharmacy_owner_id').eq('id', profile.branch_id).single().abortSignal(controller.signal);
+          if (error) throw error;
+          if (!data?.pharmacy_owner_id) { setSubscriptionStatus('expired'); return; }
+          ownerId = data.pharmacy_owner_id;
+        }
+        const { data, error } = await supabase.from('pharmacy_subscriptions').select('subscription_credit, status').eq('pharmacy_owner_id', ownerId).maybeSingle().abortSignal(controller.signal);
+        if (error) throw error;
+        const status = data?.status ?? 'expired';
+        const credit = Number(data?.subscription_credit ?? 0);
+        if (!disposed) { setSubscriptionStatus(status); setDaysRemaining(credit); }
+        await cacheMeta(`subscription:${id}`, { status, credit });
+      } catch { await fallback(); }
+      finally { clearTimeout(timer); }
+    };
+    void check();
+    return () => { disposed = true; };
+  }, [user?.id, profile?.role, profile?.branch_id, reachable]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

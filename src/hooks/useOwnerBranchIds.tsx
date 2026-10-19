@@ -13,6 +13,8 @@
  * across every component via TanStack Query's cache. The cached value is also
  * invalidated automatically by the global pull-to-refresh handler.
  */
+import { cacheMeta, readMeta } from '@/lib/offline/db';
+import { useOfflineStatus } from '@/lib/offline/store';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/db';
 import { useAuth } from './useAuth';
@@ -20,12 +22,18 @@ import { useAuth } from './useAuth';
 export const OWNER_BRANCH_IDS_KEY = (ownerId?: string) => ['owner-branch-ids', ownerId];
 
 async function fetchOwnerBranchIds(ownerId: string): Promise<string[]> {
+  if (!navigator.onLine) return await readMeta<string[]>(`branches:${ownerId}`) ?? [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
   const { data, error } = await supabase
     .from('pharmacy_branches')
     .select('id')
-    .eq('pharmacy_owner_id', ownerId);
-  if (error) throw error;
-  return (data || []).map((b: any) => b.id);
+    .eq('pharmacy_owner_id', ownerId).abortSignal(controller.signal);
+  clearTimeout(timer);
+  if (error) return await readMeta<string[]>(`branches:${ownerId}`) ?? [];
+  const ids = (data || []).map((b: any) => b.id);
+  await cacheMeta(`branches:${ownerId}`, ids);
+  return ids;
 }
 
 /**
@@ -34,6 +42,7 @@ async function fetchOwnerBranchIds(ownerId: string): Promise<string[]> {
  */
 export function useOwnerBranchIds() {
   const { profile } = useAuth();
+  const { reachable } = useOfflineStatus();
 
   // Owners use their own id directly. Staff need their owner resolved via branch
   // (handled by useResolvedOwnerId below). For now the hook only powers owner-
@@ -41,8 +50,9 @@ export function useOwnerBranchIds() {
   const ownerId = profile?.role === 'owner' ? profile.id : undefined;
 
   const query = useQuery({
-    queryKey: OWNER_BRANCH_IDS_KEY(ownerId),
-    queryFn: () => fetchOwnerBranchIds(ownerId!),
+    queryKey: [...OWNER_BRANCH_IDS_KEY(ownerId), reachable],
+    queryFn: async () => ownerId ? reachable ? fetchOwnerBranchIds(ownerId) : await readMeta<string[]>(`branches:${ownerId}`) ?? [] : [],
+    networkMode: 'always',
     enabled: !!ownerId,
     staleTime: 1000 * 60 * 5, // 5 min - branches rarely change
     gcTime: 1000 * 60 * 30,

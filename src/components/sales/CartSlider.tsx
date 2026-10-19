@@ -109,6 +109,7 @@ interface Customer {
 type ChangeAction = 'keep_profit' | 'deduct_debt' | 'give_change' | null;
 
 interface CartSliderProps {
+  offline?: boolean;
   open: boolean;
   onClose: () => void;
   cart: CartItem[];
@@ -152,7 +153,7 @@ export default function CartSlider({
   keepChangeOption, onKeepChangeOption,
   subtotal, discount, total,
   processing, onCheckout,
-  creditCheck,
+  creditCheck, offline = false,
 }: CartSliderProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const [customerSearch, setCustomerSearch] = useState('');
@@ -449,17 +450,19 @@ export default function CartSlider({
               {/* Customer */}
               <div className="space-y-1.5">
                 <Label className="text-xs">Customer (optional)</Label>
+                {offline && <p className="text-xs text-muted-foreground">Customer selection, partial payment and debt deduction need an internet connection.</p>}
                 {/* Search input */}
                 <div className="relative">
                   <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
+                    disabled={offline}
                     placeholder="Search by name or phone..."
                     value={customerSearch}
                     onChange={e => setCustomerSearch(e.target.value)}
                     className="h-8 pl-7 text-xs"
                   />
                 </div>
-                <Select value={selectedCustomerId} onValueChange={id => { onSelectCustomer(id); setCustomerSearch(''); }}>
+                <Select disabled={offline} value={selectedCustomerId} onValueChange={id => { onSelectCustomer(id); setCustomerSearch(''); }}>
                   <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Walk-in customer" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Walk-in (no customer)</SelectItem>
@@ -539,7 +542,7 @@ export default function CartSlider({
                   <Wallet className="h-3.5 w-3.5" /> Amount Received (ETB)
                 </Label>
                 <Input
-                  type="number" step="0.01" min="0"
+                  type="number" step="0.01" min={offline ? total : 0}
                   value={amountReceived}
                   onChange={e => onAmountReceivedChange(e.target.value)}
                   placeholder={total > 0 ? total.toFixed(2) : '0.00'}
@@ -582,7 +585,7 @@ export default function CartSlider({
                           <p className="text-xs text-muted-foreground">Customer has debt of ETB {(selectedCustomer?.computed_debt || 0).toFixed(2)}. How to handle?</p>
                           <RadioGroup value={keepChangeOption} onValueChange={(v: any) => onKeepChangeOption(v)} className="space-y-1">
                             <div className="flex items-center gap-2">
-                              <RadioGroupItem value="deduct_debt" id="opt-debt-sl" />
+                              <RadioGroupItem disabled={offline} value="deduct_debt" id="opt-debt-sl" />
                               <Label htmlFor="opt-debt-sl" className="text-xs cursor-pointer">
                                 Deduct ETB {Math.min(changeAmount, selectedCustomer?.computed_debt || 0).toFixed(2)} from customer debt
                               </Label>
@@ -692,7 +695,7 @@ export default function CartSlider({
               <Button
                 onClick={onCheckout}
                 className="w-full"
-                disabled={processing || cart.length === 0 || (hasChange && !changeAction) || (hasShortfall && selectedCustomerId === 'none') || (creditCheck != null && !creditCheck.allowed)}
+                disabled={processing || (offline && hasShortfall) || cart.length === 0 || (hasChange && !changeAction) || (hasShortfall && selectedCustomerId === 'none') || (creditCheck != null && !creditCheck.allowed)}
               >
                 <CreditCard className="h-4 w-4 mr-2" />
                 {processing ? 'Processing...' : `Checkout · ETB ${checkoutAmt.toFixed(2)}`}

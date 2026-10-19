@@ -1,12 +1,17 @@
 import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/db';
+import { cacheMeta, readMeta } from '@/lib/offline/db';
+import type { CachedProfile } from '@/lib/offline/types';
+import { readPersistedSession } from '@/lib/offline/cachedSession';
+import { getOfflineState } from '@/lib/offline/store';
 import { useToast } from '@/hooks/use-toast';
 
 interface Profile {
   id: string;
   full_name: string;
   role: 'owner' | 'staff' | 'developer';
+  pharmacy_name?: string;
   phone?: string;
   branch_id?: string;
   security_question?: string;
@@ -37,54 +42,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { toast } = useToast();
 
   useEffect(() => {
-    // Set up auth state listener
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          // Fetch user profile
-          setTimeout(async () => {
-            const { data: profileData } = await supabase
-              .from('profiles')
-              .select('*')
-              .eq('id', session.user.id)
-              .single();
-            
-            setProfile(profileData);
-          }, 0);
-        } else {
-          setProfile(null);
+    let disposed = false;
+    let generation = 0;
+    const hydrate = async (nextSession: Session | null) => {
+      const current = ++generation;
+      setLoading(true);
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
+      if (!nextSession?.user) {
+        setProfile(null); setLoading(false); return;
+      }
+      const id = nextSession.user.id;
+      try {
+        let nextProfile: Profile | null = null;
+        if (!navigator.onLine) nextProfile = await readMeta<CachedProfile>(`profile:${id}`) ?? null;
+        else {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 5000);
+          try {
+            const { data, error } = await supabase.from('profiles').select('*').eq('id', id).single().abortSignal(controller.signal);
+            if (error) {
+              // Only connection failures use the cached profile, never access denials.
+              if (!error.code || error.message?.includes('fetch') || controller.signal.aborted) nextProfile = await readMeta<CachedProfile>(`profile:${id}`) ?? null;
+            } else if (data) {
+              nextProfile = data;
+              const { full_name, role, branch_id, pharmacy_name, active, manually_deactivated } = data;
+              await cacheMeta(`profile:${id}`, { id, full_name, role, branch_id, pharmacy_name, active, manually_deactivated });
+            }
+          } catch { nextProfile = await readMeta<CachedProfile>(`profile:${id}`) ?? null; }
+          finally { clearTimeout(timer); }
         }
-        
-        setLoading(false);
-      }
-    );
-
-    // Check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      
-      if (session?.user) {
-        // Fetch user profile
-        setTimeout(async () => {
-          const { data: profileData } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
-          
-          setProfile(profileData);
-          setLoading(false);
-        }, 0);
-      } else {
-        setLoading(false);
-      }
+        if (!disposed && current === generation) setProfile(nextProfile);
+      } finally { if (!disposed && current === generation) setLoading(false); }
+    };
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      // Avoid making auth calls from the auth callback's locked scope.
+      setTimeout(() => { if (!disposed) void hydrate(nextSession ?? (!navigator.onLine ? readPersistedSession() : null)); }, 0);
     });
-
-    return () => subscription.unsubscribe();
+    // An expired session can block SDK initialization while refresh is offline.
+    // The existing session + cached profile are only an offline UI identity;
+    // sync always validates/refreshes the real session before sending anything.
+    if (!navigator.onLine) void hydrate(readPersistedSession());
+    const fallbackTimer = setTimeout(() => {
+      if (!disposed && !getOfflineState().reachable) void hydrate(readPersistedSession());
+    }, 5500);
+    void supabase.auth.getSession().then(({ data: { session: nextSession } }) => { if (!disposed) void hydrate(nextSession); })
+      .catch(() => { if (!disposed) setLoading(false); });
+    return () => { disposed = true; clearTimeout(fallbackTimer); subscription.unsubscribe(); };
   }, []);
 
   const signUp = async (email: string, password: string, fullName: string, role: 'owner' | 'staff' | 'developer' = 'staff') => {

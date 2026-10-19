@@ -17,13 +17,13 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import CartSlider from './CartSlider';
 import AddToCartDialog from './AddToCartDialog';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { updateCreditScore } from '@/hooks/useCreditScore';
 import { addisDayString } from '@/lib/timezone';
 import { isMeasurable } from '@/lib/itemTypes';
-import { logActivity } from '@/lib/activityLog';
-import { deductFIFO, recordSaleItemBatches } from '@/lib/batchInventory';
+import { submitSale, UnknownOutcomeStorageError } from '@/lib/offline/submitSale';
+import { useOfflineStatus } from '@/lib/offline/store';
+import type { PosPayload } from '@/lib/offline/types';
 import { useReadOnly } from '@/hooks/useReadOnly';
-import { usePackagingMap } from '@/hooks/usePackaging';
+
 import { formatStock, unitsPerStripSafe, unitsPerPackSafe, autoStripPrice, autoPackPrice } from '@/lib/packaging';
 
 interface Medicine {
@@ -72,8 +72,11 @@ type ChangeAction = 'keep_profit' | 'deduct_debt' | 'give_change' | null;
 
 export default function SalesManagement() {
   // TanStack Query–cached product list + customers (instant hydration on revisit).
-  const { medicines, customers, loading, invalidate: invalidateSalesCache } = useSalesInventory();
-  const { data: packagingMap = {} } = usePackagingMap(medicines.map(m => m.medicine_id));
+  const { medicines, customers, loading, packagingMap, cachedAt, catalogError, invalidate: invalidateSalesCache } = useSalesInventory();
+  const { reachable, storageError } = useOfflineStatus();
+  const offline = !reachable;
+  const transactionRef = useRef<{ id: string; payload?: PosPayload } | null>(null);
+  const checkoutBusy = useRef(false);
   const [filteredMedicines, setFilteredMedicines] = useState<Medicine[]>([]);
   const [paginatedMedicines, setPaginatedMedicines] = useState<Medicine[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -98,13 +101,17 @@ export default function SalesManagement() {
   const todayISO = () => addisDayString();
   const [saleDate, setSaleDate] = useState<string>(todayISO());
 
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const { toast } = useToast();
   const { selectedBranch, branchType } = useBranchContext();
   const isMobile = useIsMobile();
   const readOnly = useReadOnly();
   const [isSmallScreen, setIsSmallScreen] = useState(false);
   const isPharmacy = branchType === 'pharmacy';
+
+  useEffect(() => {
+    if (offline) { setSelectedCustomerId('none'); setKeepChangeOption('profit'); }
+  }, [offline]);
 
   // Track < 1024px for cart icon behavior (tablet + mobile)
   useEffect(() => {
@@ -166,7 +173,7 @@ export default function SalesManagement() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     expiry.setHours(0, 0, 0, 0);
-    return expiry <= today;
+    return expiry < today;
   };
 
   const isExpiringSoon = (expiryDate?: string) => {
@@ -498,6 +505,10 @@ export default function SalesManagement() {
       toast({ title: 'Branch Required', description: 'Please select a specific branch before selling.', variant: 'destructive' });
       return;
     }
+    if (offline && amountReceived !== '' && Number(amountReceived) < calculateTotal()) {
+      toast({ title: 'Full payment required', description: 'Partial payment and customer debt need an internet connection.', variant: 'destructive' });
+      return;
+    }
     // Credit limit check
     if (creditCheck && !creditCheck.allowed) {
       toast({ title: 'Credit Denied', description: creditCheck.reason, variant: 'destructive' });
@@ -529,8 +540,11 @@ export default function SalesManagement() {
   };
 
   const confirmCheckout = async () => {
+    if (checkoutBusy.current) return;
+    checkoutBusy.current = true;
     setShowCheckoutConfirm(false);
     setProcessing(true);
+    if (!transactionRef.current) transactionRef.current = { id: crypto.randomUUID() };
     try {
       const total = calculateTotal();
       const received = amountReceived !== '' ? parseFloat(amountReceived) : total;
@@ -571,63 +585,8 @@ export default function SalesManagement() {
       }
       // else exact payment — actualPaid = received = total
 
-      const paymentStatus = actualPaid >= total ? 'paid' : actualPaid > 0 ? 'partial' : 'unpaid';
-
-      // Build the base sale insert payload — only columns confirmed to exist in the DB
-      const baseSaleInsert: Record<string, unknown> = {
-        total_amount: Number(total.toFixed(2)),
-        payment_method: String(paymentMethod),
-        discount_amount: Number(calculateDiscount().toFixed(2)),
-        sold_by: profile?.id ?? null,
-        branch_id: selectedBranch ?? profile?.branch_id ?? null,
-        amount_paid: Number(actualPaid.toFixed(2)),
-        payment_status: String(paymentStatus),
-        // Business/accounting date chosen by the cashier. The DB also stores
-        // its own created_at / updated_at timestamps untouched.
-        sale_date: saleDate,
-      };
-
-      // Only add customer_id if a customer is selected
-      if (selectedCustomerId !== 'none') {
-        baseSaleInsert.customer_id = selectedCustomerId;
-      }
-
-      console.log('[Sale Payload]', baseSaleInsert);
-
-      // Try with extended columns first; fall back to base if schema doesn't have them
-      let saleData: any = null;
-      const extendedInsert = { ...baseSaleInsert };
-      if (finalChangeAction) extendedInsert.change_action = String(finalChangeAction);
-      if (extraProfit > 0) extendedInsert.extra_profit = Number(extraProfit.toFixed(2));
-
-      let saleResult = await (supabase as any)
-        .from('sales')
-        .insert([extendedInsert])
-        .select()
-        .single();
-
-      // If extended columns don't exist in schema, retry without them (and
-      // without sale_date so installs that haven't run the migration still work).
-      if (
-        saleResult.error?.code === '42703' ||
-        saleResult.error?.code === 'PGRST204' ||
-        saleResult.error?.message?.includes('does not exist') ||
-        saleResult.error?.message?.toLowerCase?.().includes("could not find") 
-      ) {
-        console.warn('[Sale Insert] Falling back to base payload (extended columns not in schema)');
-        const { sale_date: _omitDate, ...legacyInsert } = baseSaleInsert as any;
-        saleResult = await (supabase as any)
-          .from('sales')
-          .insert([legacyInsert])
-          .select()
-          .single();
-      }
-
-      if (saleResult.error) {
-        console.error('[Sale Insert Error]', saleResult.error);
-        throw saleResult.error;
-      }
-      saleData = saleResult.data;
+      const branchId = selectedBranch ?? profile?.branch_id;
+      if (!user || !branchId) throw new Error('Please sign in and select a branch before confirming.');
 
       // Keep compatibility with both legacy and new branch_items system.
       // Now using branch_item_id (item.id is branch_items.id).
@@ -659,209 +618,49 @@ export default function SalesManagement() {
         const stripesSoldCol: number | null = level === 'strip' ? Math.round(qtyForRow * 1000) : null;
 
         return {
-          sale_id: saleData.id,
+
           medicine_id: (item as any).medicine_id || item.id,
           branch_item_id: item.id,
           quantity: Number(Number(qtyForRow).toFixed(4)),
           unit_price: Number(item.selling_price),
           total_price: Number(item.total.toFixed(2)),
           sale_type: level,
+          level_flow: !!item.sellLevel,
+          base_quantity: item.sellLevel && item.unitsPerLevel ? item.quantity * item.unitsPerLevel
+            : item.saleType === 'full_pack' ? item.quantity
+            : item.stripesCount && item.units_per_pack ? item.stripesCount / item.units_per_pack : 0,
           strip_quantity: stripQtyCol,
           pack_quantity: packQtyCol,
           stripes_sold: stripesSoldCol,
         };
       });
 
-      const { error: itemsError } = await (supabase as any).from('sale_items').insert(saleItems);
-      if (itemsError) {
-        console.error('[Sale Items Error]', itemsError);
-        throw itemsError;
-      }
-
-      // Stock deduction — FIFO batch deduction + branch_items sync
-      for (const item of cart) {
-        let totalQtyToDeduct = 0;
-        if (item.sellLevel && item.unitsPerLevel) {
-          // New multi-level flow: quantity is in sellLevel units → convert to base pieces.
-          totalQtyToDeduct = item.quantity * item.unitsPerLevel;
-        } else if (item.saleType === 'full_pack') {
-          totalQtyToDeduct = item.quantity;
-        } else if (item.saleType === 'by_stripe' && item.stripesCount) {
-          const upp = item.units_per_pack;
-          if (!upp) continue;
-          totalQtyToDeduct = item.stripesCount / upp;
-        }
-
-        if (totalQtyToDeduct > 0) {
-          // Try FIFO batch deduction first
-          const { consumed, error: fifoErr } = await deductFIFO(item.id, totalQtyToDeduct);
-
-          if (fifoErr || consumed.length === 0) {
-            // Fallback: direct branch_items update (for items without batches)
-            const currentMed = medicines.find(m => m.id === item.id);
-            if (currentMed) {
-              const newQty = Math.max(0, currentMed.stock_quantity - totalQtyToDeduct);
-              await (supabase as any)
-                .from('branch_items')
-                .update({ quantity: newQty, updated_at: new Date().toISOString() })
-                .eq('id', item.id);
-            }
-          }
-
-          // Record sale_item_batches for audit trail
-          if (consumed.length > 0) {
-            // Find the sale_item_id for this cart item
-            const saleItemForThis = saleItems.find((si: any) =>
-              si.branch_item_id === item.id
-            );
-            // We need the inserted sale_item id — fetch it
-            const { data: insertedSaleItems } = await (supabase as any)
-              .from('sale_items')
-              .select('id')
-              .eq('sale_id', saleData.id)
-              .eq('branch_item_id', item.id)
-              .limit(1);
-
-            if (insertedSaleItems && insertedSaleItems.length > 0) {
-              await recordSaleItemBatches(insertedSaleItems[0].id, consumed);
-            }
-          }
-        }
-      }
-
-      // Handle debt deduction — recorded via a customer_payment entry
-      if (shouldDeductDebt && customerHasDebt && selectedCustomer) {
-        const deductAmount = Math.min(change, selectedCustomer.computed_debt || 0);
-        const { data: deductPayment } = await (supabase as any)
-          .from('customer_payments')
-          .insert([{
-            customer_id: selectedCustomer.id,
-            amount: deductAmount,
-            payment_method: paymentMethod,
-            notes: 'Auto-deducted from change',
-            branch_id: selectedBranch ?? profile?.branch_id ?? null,
-            created_by: profile?.id ?? null,
-          }])
-          .select('id')
-          .single();
-
-        // Update customer_credits for debt deduction
-        const { data: existingCredit } = await (supabase as any)
-          .from('customer_credits')
-          .select('id, total_debt')
-          .eq('customer_id', selectedCustomer.id)
-          .single();
-
-        if (existingCredit) {
-          const prevBal = Number(existingCredit.total_debt);
-          const newBal = Math.max(0, prevBal - deductAmount);
-          await (supabase as any).from('customer_credits').update({ total_debt: newBal, last_updated: new Date().toISOString() }).eq('id', existingCredit.id);
-          await (supabase as any).from('customer_credit_transactions').insert({
-            customer_id: selectedCustomer.id,
-            branch_id: selectedBranch ?? profile?.branch_id ?? null,
-            transaction_type: 'payment',
-            amount: deductAmount,
-            previous_balance: prevBal,
-            new_balance: newBal,
-            payment_id: deductPayment?.id ?? null,
-            notes: 'Auto-deducted from change',
-            created_by: profile?.id ?? null,
-          });
-        }
-      }
-
-      // Update customer_credits for credit sale (underpaid)
-      if (selectedCustomerId !== 'none' && underpaid > 0.001) {
-        const branchId = selectedBranch ?? profile?.branch_id ?? null;
-        const { data: existingCredit } = await (supabase as any)
-          .from('customer_credits')
-          .select('id, total_debt')
-          .eq('customer_id', selectedCustomerId)
-          .single();
-
-        if (existingCredit) {
-          const prevBal = Number(existingCredit.total_debt);
-          const newBal = prevBal + underpaid;
-          await (supabase as any).from('customer_credits').update({ total_debt: newBal, last_updated: new Date().toISOString() }).eq('id', existingCredit.id);
-          await (supabase as any).from('customer_credit_transactions').insert({
-            customer_id: selectedCustomerId,
-            branch_id: branchId,
-            transaction_type: 'sale_credit',
-            amount: underpaid,
-            previous_balance: prevBal,
-            new_balance: newBal,
-            sale_id: saleData.id,
-            notes: null,
-            created_by: profile?.id ?? null,
-          });
-        } else {
-          // Create new customer_credits record
-          await (supabase as any).from('customer_credits').insert({
-            customer_id: selectedCustomerId,
-            branch_id: branchId,
-            total_debt: underpaid,
-          });
-          await (supabase as any).from('customer_credit_transactions').insert({
-            customer_id: selectedCustomerId,
-            branch_id: branchId,
-            transaction_type: 'sale_credit',
-            amount: underpaid,
-            previous_balance: 0,
-            new_balance: underpaid,
-            sale_id: saleData.id,
-            notes: null,
-            created_by: profile?.id ?? null,
-          });
-        }
-
-        // Auto credit score: penalize for debt sale
-        const cust = customers.find(c => c.id === selectedCustomerId);
-        if (cust) {
-          await updateCreditScore({
-            customerId: selectedCustomerId,
-            currentScore: cust.credit_score ?? 50,
-            changeAmount: -5,
-            reason: `New debt from sale (ETB ${underpaid.toFixed(2)} unpaid)`,
-            createdBy: profile?.id,
-            branchId: selectedBranch || profile?.branch_id,
-          });
-        }
-      }
+      // Freeze unknown/rejected retry payloads so one ID never describes two sales.
+      const payload: PosPayload = transactionRef.current?.payload ?? {
+        client_txn_id: transactionRef.current?.id ?? crypto.randomUUID(), branch_id: branchId,
+        sale_date: saleDate, device_created_at: new Date().toISOString(), payment_method: paymentMethod,
+        total_amount: Number(total.toFixed(2)), discount_amount: Number(calculateDiscount().toFixed(2)),
+        amount_paid: actualPaid, change_action: finalChangeAction as PosPayload['change_action'], extra_profit: extraProfit,
+        customer_id: offline || selectedCustomerId === 'none' ? null : selectedCustomerId,
+        deduct_debt_amount: shouldDeductDebt ? Math.min(change, selectedCustomer?.computed_debt || 0) : 0,
+        items: saleItems,
+      };
+      if (transactionRef.current) transactionRef.current.payload = payload;
+      const result = await submitSale(payload, user.id, {
+        total: payload.total_amount, customer_name: selectedCustomer?.name || null,
+        items: cart.map((it, index) => ({ name: it.name, quantity: saleItems[index].quantity,
+          unit_price: saleItems[index].unit_price, line_total: saleItems[index].total_price, sale_type: saleItems[index].sale_type })),
+      }, selectedCustomer?.credit_score);
 
       let successMessage = `Sale completed! Total: ETB ${total.toFixed(2)} via ${paymentMethod}.`;
       if (extraProfit > 0) successMessage += ` Extra profit: ETB ${extraProfit.toFixed(2)}.`;
       if (finalChangeAction === 'give_change') successMessage += ` Change given: ETB ${change.toFixed(2)}.`;
       if (shouldDeductDebt) successMessage += ` ETB ${Math.min(change, selectedCustomer?.computed_debt || 0).toFixed(2)} deducted from customer debt.`;
 
-      toast({ title: 'Success', description: successMessage });
-
-      // Log activity (fire-and-forget)
-      logActivity({
-        type: 'sell_item',
-        entityType: 'sale',
-        entityId: (saleData as any)?.id,
-        metadata: {
-          total: Number(total.toFixed(2)),
-          payment_method: paymentMethod,
-          discount: Number(calculateDiscount().toFixed(2)),
-          customer_name: selectedCustomer?.name || null,
-          sale_date: saleDate,
-          items: cart.map((it) => {
-            const qty = it.saleType === 'by_stripe' ? (it.stripesCount ?? 0) : it.quantity;
-            const lineTotal = Number((it as any).total ?? 0);
-            const unit = qty > 0 ? lineTotal / qty : Number(it.selling_price ?? 0);
-            return {
-              name: it.name,
-              quantity: qty,
-              unit_price: Number(unit.toFixed(2)),
-              line_total: Number(lineTotal.toFixed(2)),
-              sale_type: it.saleType,
-            };
-          }),
-        },
-      });
+      toast({ title: result.status === 'synced' ? 'Success' : 'Saved on this device', description: result.message ?? successMessage });
 
       // Reset state
+      transactionRef.current = null;
       setCart([]);
       setPaymentMethod('Cash');
       setDiscountPercent(0);
@@ -873,17 +672,19 @@ export default function SalesManagement() {
       // Reset sale date back to today for the next transaction.
       setSaleDate(todayISO());
       // Revalidate cached product list + customers (debt may have changed).
-      invalidateSalesCache();
+      if (result.status === 'synced') invalidateSalesCache();
       // Broadcast to all pages (Inventory, Dashboard, etc.) so stock cards refresh live.
-      window.dispatchEvent(new Event('app:refresh'));
+      if (result.status === 'synced') window.dispatchEvent(new Event('app:refresh'));
     } catch (error: any) {
       console.error('[Checkout Error]', error);
+      if (transactionRef.current && !(error instanceof UnknownOutcomeStorageError)) transactionRef.current.payload = undefined;
       toast({
         title: 'Payment Failed',
-        description: 'Unable to process payment. Please check payment details.',
+        description: error instanceof Error ? error.message : 'Could not confirm this sale. Your cart has been kept.',
         variant: 'destructive',
       });
     } finally {
+      checkoutBusy.current = false;
       setProcessing(false);
     }
   };
@@ -907,10 +708,10 @@ export default function SalesManagement() {
     // branch_items.selling_price is per-unit (LPI), so strip/pack prices are
     // simply unit price multiplied by the unit count at each level.
     let unitPrice = 0, stripPrice = 0, packPrice = 0;
-    if (hasNewPackaging) {
-      const upStrip = unitsPerStripSafe(pkg!);
-      const upPack = unitsPerPackSafe(pkg!);
-      unitPrice = pkg!.unit_selling_price ?? medicine.selling_price;
+    if (hasNewPackaging && pkg) {
+      const upStrip = unitsPerStripSafe(pkg);
+      const upPack = unitsPerPackSafe(pkg);
+      unitPrice = pkg.unit_selling_price ?? medicine.selling_price;
       stripPrice = unitPrice * upStrip;
       packPrice = unitPrice * upPack;
     }
@@ -965,13 +766,13 @@ export default function SalesManagement() {
                 <span>{unitName} price:</span>
                 <span className="font-medium">ETB {Number(unitPrice || 0).toFixed(2)}</span>
               </div>
-              {pkg!.strip_enabled && (
+              {pkg?.strip_enabled && (
                 <div className="flex justify-between text-sm text-muted-foreground">
                   <span>{stripName} price:</span>
                   <span>ETB {Number(stripPrice || 0).toFixed(2)}</span>
                 </div>
               )}
-              {pkg!.pack_enabled && (
+              {pkg?.pack_enabled && (
                 <div className="flex justify-between text-sm text-muted-foreground">
                   <span>{packName} price:</span>
                   <span>ETB {Number(packPrice || 0).toFixed(2)}</span>
@@ -980,7 +781,7 @@ export default function SalesManagement() {
               <div className="flex justify-between text-sm">
                 <span>Stock:</span>
                 <Badge variant={medicine.stock_quantity <= 10 ? 'destructive' : 'secondary'}>
-                  {formatStock(medicine.stock_quantity, pkg!)}
+                  {pkg && formatStock(medicine.stock_quantity, pkg)}
                 </Badge>
               </div>
               <div className="flex justify-between text-xs text-muted-foreground">
@@ -1050,6 +851,11 @@ export default function SalesManagement() {
     <div className="flex flex-col lg:grid lg:grid-cols-3 gap-6 relative">
       {/* Medicine/Item list */}
       <div className="lg:col-span-2 space-y-4">
+        {offline && <div role="status" className="border border-warning/50 bg-warning/10 text-foreground rounded-md p-3 text-sm">
+          Prices and stock as of {cachedAt ? new Date(cachedAt).toLocaleString() : 'no saved catalog'}.
+          {!cachedAt && ' Connect to the internet to save this branch’s catalog first.'}
+        </div>}
+        {(catalogError || storageError) && <p role="alert" className="text-sm text-destructive">{catalogError || storageError}</p>}
         {/* Sticky Sale Date bar — applies to every item in this transaction */}
         <div className="sticky top-0 z-30 -mx-2 px-2 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b border-border/60">
           <div className={`rounded-lg border ${isCustomSaleDate ? 'border-warning/60 bg-warning/10' : 'border-primary/30 bg-primary/5'} p-3 flex items-center gap-3`}>
@@ -1196,6 +1002,7 @@ export default function SalesManagement() {
 
       {/* Cart — desktop sidebar / mobile slider */}
       <CartSlider
+        offline={offline}
         open={cartOpen}
         onClose={() => setCartOpen(false)}
         cart={cart}
