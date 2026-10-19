@@ -10,6 +10,7 @@ import { settleSale } from '@/lib/offline/queue';
 import { saleEffects } from '@/lib/offline/effects';
 import { fetchCatalog, replaceCatalog } from '@/lib/offline/catalog';
 import type { RpcResult } from '@/lib/offline/types';
+import { supabase } from '@/lib/db';
 
 export function useOfflineSync() {
   const { user } = useAuth();
@@ -42,6 +43,29 @@ export function useOfflineSync() {
           const cutoff = new Date(Date.now() - SYNCED_RETENTION_MS).toISOString();
           await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'synced' && !!r.syncedAt && r.syncedAt < cutoff).delete();
           if (!await checkReachability() || !await validSession(userId)) return;
+          // Owner reconciliation does not automatically retry a cashier's conflict.
+          // Read its authoritative outcome to release the reservation when resolved.
+          const attention = await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'needs_attention' && !!r.issueId).toArray();
+          for (const record of attention) {
+            const { data, error } = await supabase.from('pos_sync_issues').select('*').eq('id', record.issueId).maybeSingle();
+            if (error || !data) continue;
+            if (data.status === 'voided' || data.status === 'synced' || data.status === 'resolved') {
+              let resolution: RpcResult = { status: 'voided', issue_id: record.issueId, reason_code: data.reason_code };
+              if (data.status !== 'voided') {
+                // Do not assume an issue-table sale-ID column. The original ID
+                // safely reads back an already reconciled sale through the RPC.
+                const reply = await callPos(record.payload, record.mode);
+                if (reply.error || reply.data?.status !== 'synced') continue;
+                resolution = { ...reply.data, duplicate: true } as RpcResult;
+              }
+              await settleSale(record, resolution);
+              try {
+                const rows = await fetchCatalog([record.branchId], userId);
+                await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([record.branchId], userId, rows));
+              } catch { /* Keep last snapshot until online refresh. */ }
+              queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh'));
+            }
+          }
           const pending = await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'pending').sortBy('createdAt');
           for (const record of pending) {
             if (disposed || (record.nextAttemptAt ?? 0) > Date.now()) break;
@@ -86,7 +110,7 @@ export function useOfflineSync() {
     window.addEventListener('offline', offline);
     window.addEventListener('pos:queue', trigger);
     document.addEventListener('visibilitychange', visible);
-    const interval = setInterval(() => { if (getOfflineState().pendingCount || !getOfflineState().reachable) trigger(); }, 30_000);
+    const interval = setInterval(() => { if (getOfflineState().pendingCount || getOfflineState().needsAttentionCount || !getOfflineState().reachable) trigger(); }, 30_000);
     return () => { disposed = true; subscription.unsubscribe(); clearInterval(interval);
       window.removeEventListener('online', trigger); window.removeEventListener('offline', offline);
       window.removeEventListener('pos:queue', trigger); document.removeEventListener('visibilitychange', visible); };

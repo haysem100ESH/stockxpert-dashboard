@@ -12,3 +12,12 @@ export function readPersistedSession(): Session | null {
     return candidate as Session;
   } catch { return null; }
 }
+
+/** Offline logout cannot revoke remotely; remove this origin's SDK session. */
+export function clearPersistedSession() {
+  const host = new URL(supabase.supabaseUrl).hostname.split('.')[0];
+  const key = `sb-${host}-auth-token`;
+  localStorage.removeItem(key);
+  localStorage.removeItem(`${key}-code-verifier`);
+  localStorage.removeItem(`${key}-user`);
+}

@@ -6,3 +6,5 @@
 - Cache access metadata per authenticated user and deny offline access without a previously verified cached result; server validation remains authoritative.
 - Register the generated app-shell worker only through the guarded PWA wrapper; development and Lovable previews must never register it.
 - Use Bun tests with fake IndexedDB for offline business rules; browser checks must distinguish simulated coverage from authenticated server verification.
+- Export POS records through an explicit field allowlist; sign-out cleanup must recheck export coverage under the POS lock before deleting only the departing user's records.
+- Keep reconciliation online-only and rely on existing server RLS/RPC authorization; client owner checks only gate presentation, never grant privileges.

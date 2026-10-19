@@ -647,6 +647,7 @@ export default function SalesManagement() {
       };
       if (transactionRef.current) transactionRef.current.payload = payload;
       const result = await submitSale(payload, user.id, {
+        branch_name: cart[0]?.branch_name,
         total: payload.total_amount, customer_name: selectedCustomer?.name || null,
         items: cart.map((it, index) => ({ name: it.name, quantity: saleItems[index].quantity,
           unit_price: saleItems[index].unit_price, line_total: saleItems[index].total_price, sale_type: saleItems[index].sale_type })),
@@ -657,7 +658,7 @@ export default function SalesManagement() {
       if (finalChangeAction === 'give_change') successMessage += ` Change given: ETB ${change.toFixed(2)}.`;
       if (shouldDeductDebt) successMessage += ` ETB ${Math.min(change, selectedCustomer?.computed_debt || 0).toFixed(2)} deducted from customer debt.`;
 
-      toast({ title: result.status === 'synced' ? 'Success' : 'Saved on this device', description: result.message ?? successMessage });
+      toast({ title: result.status === 'synced' ? 'Confirmed by server' : 'Saved on this device — not server-confirmed', description: result.message ?? successMessage });
 
       // Reset state
       transactionRef.current = null;
@@ -1053,9 +1054,9 @@ export default function SalesManagement() {
         open={showCheckoutConfirm}
         onOpenChange={setShowCheckoutConfirm}
         title="Confirm Checkout"
-        description={`Complete sale? Total: ETB ${total.toFixed(2)} via ${paymentMethod}`}
+        description={`${offline ? 'Save on this device? This is not confirmation by the server.' : 'Send to the server? If confirmation is unavailable, this sale will be saved on this device for retry.'} Total: ETB ${total.toFixed(2)} via ${paymentMethod}`}
         onConfirm={confirmCheckout}
-        confirmText="Complete Sale"
+        confirmText={offline ? 'Save on device' : 'Confirm sale'}
       />
     </div>
   );

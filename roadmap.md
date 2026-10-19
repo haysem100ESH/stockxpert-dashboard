@@ -1,5 +1,12 @@
 # Offline POS — part 1
 
+## Part 2
+- [x] Pending sales sheet, retry and token-free export
+- [x] Online owner reconciliation and sidebar count
+- [x] Export-gated sign-out and user cache cleanup
+- [x] Recovery/decommissioning docs and acceptance checklist
+- [x] Rule tests and simulated browser verification
+
 - [x] Local catalog, durable checkout queue and atomic RPC submission
 - [x] Sales integration and offline payment restrictions
 - [x] Single sync engine and header status
