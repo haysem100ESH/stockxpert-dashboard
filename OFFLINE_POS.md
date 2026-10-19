@@ -122,6 +122,21 @@ Queued retries derive mode from the original payload: fully paid sales without d
 
 ## Automated checks and verification limits
 
+Offline Activity Center and atomic activity: full `bun test` suite passed **135 tests, 0 failures, 394 assertions across 12 files**. Tests cover new online/offline payload flags and timestamps, immutable legacy payloads, flagged/legacy/duplicate sale effects, unchanged credit penalty, private date-filtered pending statuses, transaction-ID de-duplication, separate period counts, user/date-scoped cache round trips and close/reopen persistence. No browser/device or authenticated server verification was performed.
+
+The initial test run had 132 passes and one failure caused by an incorrect expected text for the existing PRICE_CHANGED message; corrected to reuse `reasonMessage()` without changing production behavior. Failure output verbatim:
+```text
+error: expect(received).toEqual(expected)
+
+  [
+    "Pending sync",
+    "Syncing",
+-   "Needs attention: The price has changed. Refresh prices and try again.",
++   "Needs attention: The price has changed. Refresh the catalog and review the cart.",
+    "Discarded — not recorded",
+  ]
+```
+
 Shared-stock reservation fix: full `bun test` suite passed **119 tests, 0 failures, 352 assertions across 10 files**. Fake IndexedDB tests confirm a different cashier's 5 reserved units leave 7 of 12 available; pending/syncing/needs_attention reserve, discarded/synced/voided do not; another branch stays isolated; server catalog replacement after settlement does not double-subtract; private lists/export/backup remain user-scoped. No browser/device verification was performed.
 
 Sign-out retention checks: full `bun test` suite passed **112 tests, 0 failures, 325 assertions across 10 files**. Fake IndexedDB tests cover authentication-only online/offline sign-out, all-status sales/catalog/meta retention, session clearing, same-user interrupted queue recovery with unchanged payload, count-only other-cashier isolation, and current-export retirement gates. No browser/device or authenticated server verification was performed for this change.
