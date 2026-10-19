@@ -1,9 +1,9 @@
 # Offline POS — part 1
 
 ## Shared-stock reservation fix
-- [ ] Reserve stock across all cashiers on this PC within the same branch
-- [ ] Test status/branch isolation, catalog refresh without double counting, and unchanged private records
-- [ ] Run full Bun suite; no browser/device verification
+- [x] Reserve stock across all cashiers on this PC within the same branch
+- [x] Test status/branch isolation, catalog refresh without double counting, and unchanged private records
+- [x] Full Bun suite: 119 pass, 0 fail, 352 assertions; no browser/device verification
 
 ## Sign-out retention
 - [x] Preserve all device data on normal sign-out; clear authentication only
