@@ -1,7 +1,7 @@
 // Type-bypass helper for Supabase queries that reference tables
 // not yet reflected in the auto-generated types.ts (which only contains 'todos').
 // All application tables live in the real database; this cast lets TypeScript compile.
-import { supabase as _supabase } from '@/integrations/supabase/client';
+import { supabase as _supabase } from '@/integrations/external-supabase/client';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const db = _supabase as any;

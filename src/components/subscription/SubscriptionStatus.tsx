@@ -2,7 +2,7 @@ import { useSubscription } from '@/hooks/useSubscription';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertTriangle, Lock, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from '@/lib/router-compat';
 import { useEffect, useState } from 'react';
 
 export default function SubscriptionStatus() {

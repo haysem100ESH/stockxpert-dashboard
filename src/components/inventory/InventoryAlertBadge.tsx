@@ -1,7 +1,7 @@
 import { Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from '@/lib/router-compat';
 import { useInventoryAlerts } from '@/hooks/useInventoryAlerts';
 import {
   Tooltip,
