@@ -57,4 +57,11 @@ describe('durable checkout transaction', () => {
     expect((await offlineDb.sales.get('txn'))?.serverSaleId).toBe('server-sale');
     expect(availableStock((await offlineDb.catalog.get('item'))?.serverAvailable ?? 0, 'item', await offlineDb.sales.toArray())).toBe(10);
   });
+  test('settling the same confirmed transaction twice does not subtract stock twice', async () => {
+    const record = sale('pending'); await enqueueSale(record, true);
+    await settleSale(record, { status: 'synced', sale_id: 'server-sale' });
+    await settleSale(record, { status: 'synced', sale_id: 'server-sale', duplicate: true });
+    expect((await offlineDb.catalog.get('item'))?.serverAvailable).toBe(10);
+    expect(await offlineDb.sales.count()).toBe(1);
+  });
 });
