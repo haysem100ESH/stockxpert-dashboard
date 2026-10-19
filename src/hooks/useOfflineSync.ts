@@ -71,13 +71,13 @@ export function useOfflineSync() {
           for (const record of pending) {
             if (disposed || (record.nextAttemptAt ?? 0) > Date.now()) break;
             setOfflineState({ connection: 'syncing' });
-              const result = await syncSale(record);
-              if (!result) {
-                if (await checkReachability()) await validSession(userId);
-                if ((await offlineDb.sales.get(record.clientTxnId))?.status === 'pending') break;
-                continue;
-              }
-              if (result.status === 'synced') {
+            const result = await syncSale(record);
+            if (!result) {
+              if (await checkReachability()) await validSession(userId);
+              if ((await offlineDb.sales.get(record.clientTxnId))?.status === 'pending') break;
+              continue;
+            }
+            if (result.status === 'synced') {
                 await saleEffects(record, result);
                 try {
                   const rows = await fetchCatalog([record.branchId], userId);
@@ -85,7 +85,7 @@ export function useOfflineSync() {
                 } catch { /* Keep conservative snapshot. */ }
                 queryClient.invalidateQueries();
                 window.dispatchEvent(new Event('app:refresh'));
-              }
+            }
           }
         });
       } catch { setOfflineState({ storageError: 'Local storage is unavailable. Pending sales have not been removed.' }); }

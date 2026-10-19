@@ -4,7 +4,10 @@ import Dexie from 'dexie';
 import { beforeEach, afterAll, expect, mock, test } from 'bun:test';
 import { sale } from './rules.test';
 Dexie.dependencies.indexedDB = indexedDB; Dexie.dependencies.IDBKeyRange = IDBKeyRange;
-mock.module('./network', () => ({ withPosLock: (work: () => Promise<unknown>) => new Promise((resolve, reject) => {
+mock.module('./network', () => ({
+  validSession: async () => true, checkReachability: async () => true,
+  callPos: async () => ({ data: null, error: new Error('No test response configured') }),
+  withPosLock: (work: () => Promise<unknown>) => new Promise((resolve, reject) => {
   // Web Locks invoke callbacks in a new task, outside Dexie's transaction zone.
   setTimeout(() => { work().then(resolve, reject); }, 0);
 }) }));
