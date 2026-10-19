@@ -11,6 +11,7 @@ const { offlineDb } = await import('./db');
 const backup = await import('./backup');
 const { EXPORT_FIELDS } = await import('./deviceSafety');
 const { parseBackup, restoreBackup, previewBackup, OTHER_CASHIER } = await import('./restore');
+const { getOfflineState, setOfflineState } = await import('./store');
 
 class FakeDir {
   files = new Map<string, string>(); permission: PermissionState = 'granted'; failWrites = false;

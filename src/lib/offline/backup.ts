@@ -87,9 +87,16 @@ export async function resumeBackup(userId: string) {
   } catch (e) { setBackup({ state: 'failing', reason: reasonOf(e) }); return; }
   await runBackup(userId);
 }
+/** Closing the folder chooser is the cashier changing their mind: no state change, no error message. */
+const isChooserCancelled = (e: unknown) => typeof e === 'object' && e !== null && (e as { name?: unknown }).name === 'AbortError';
+
 export async function setUpBackup(userId: string) {
-  const picker = (window as unknown as { showDirectoryPicker: (o: object) => Promise<DirHandleLike> }).showDirectoryPicker;
-  const dir = await picker({ id: 'pharmaxpert-backup', mode: 'readwrite', startIn: 'documents' });
+  // Native window methods need their receiver: a detached call throws "TypeError: Illegal invocation" in Chrome/Edge.
+  let dir: DirHandleLike;
+  try {
+    dir = await (window as unknown as { showDirectoryPicker: (o: object) => Promise<DirHandleLike> })
+      .showDirectoryPicker({ id: 'pharmaxpert-backup', mode: 'readwrite', startIn: 'documents' });
+  } catch (e) { if (isChooserCancelled(e)) return getOfflineState().backup; throw e; }
   await rememberBackupDir(userId, dir);
   await getDeviceId();
   return runBackup(userId);
