@@ -3,6 +3,7 @@ import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import Dexie from 'dexie';
 import { beforeEach, afterAll, expect, mock, test } from 'bun:test';
 import { sale } from './rules.test';
+import type { DirHandleLike } from './backup';
 Dexie.dependencies.indexedDB = indexedDB; Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 mock.module('./network', () => ({ validSession: async () => true, checkReachability: async () => true,
   callPos: async () => ({ data: null, error: new Error('none') }),
