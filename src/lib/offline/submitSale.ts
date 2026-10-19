@@ -28,7 +28,7 @@ export async function submitSale(payload: PosPayload, userId: string, summary: S
       const blocked = await ensureOfflineSaveAllowed();
       if (blocked) throw new Error(blocked);
       await enqueueSale(record, true);
-      signalBackupNow();
+      try { signalBackupNow(); } catch { /* Backup must never fail checkout. */ }
       signalSync();
       return { status: 'saved', message: 'Saved on this device (not yet confirmed by server)' };
     }
