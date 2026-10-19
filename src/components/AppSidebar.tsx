@@ -38,6 +38,7 @@ import { useBranding } from "@/hooks/useBranding";
 import { useAdvancedMode } from "@/hooks/useAdvancedMode";
 import { Badge } from "@/components/ui/badge";
 import { useStaffPermissions, getPageNameForRoute } from "@/hooks/useStaffPermissions";
+import { useSyncIssueCount } from '@/hooks/useSyncIssues';
 
 export function AppSidebar() {
   const { state, setOpenMobile } = useSidebar();
@@ -48,6 +49,7 @@ export function AppSidebar() {
   const branding = useBranding();
   const { isAdvancedMode } = useAdvancedMode();
   const { canAccess } = useStaffPermissions();
+  const issueCount = useSyncIssueCount();
   const currentPath = location.pathname;
 
   const isPharmacy = branchType === 'pharmacy';
@@ -59,6 +61,7 @@ export function AppSidebar() {
     { title: "Smart Inventory", url: "/smart-inventory", icon: Brain },
     { title: "Medicine Codes", url: "/medicine-codes", icon: Tag },
     { title: "Sales", url: "/sales", icon: ShoppingCart },
+    { title: "Sync issues", url: "/sync-issues", icon: ClipboardList },
     { title: "Finance", url: "/finance", icon: DollarSign },
     { title: "Customers", url: "/customers", icon: UserCheck },
     { title: "Suppliers", url: "/suppliers", icon: Truck },
@@ -163,6 +166,7 @@ export function AppSidebar() {
                     >
                       <item.icon className="h-4 w-4" />
                       {!isCollapsed && <span>{item.title}</span>}
+                      {item.url === '/sync-issues' && issueCount.data !== undefined && <Badge variant="secondary" className="ml-auto">{issueCount.data}</Badge>}
                     </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

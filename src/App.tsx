@@ -14,6 +14,7 @@ import PermissionGuard from "@/components/permissions/PermissionGuard";
 import Dashboard from "./pages/Dashboard";
 import InventoryPage from "./pages/InventoryPage";
 import SalesPage from "./pages/SalesPage";
+import SyncIssuesPage from './pages/SyncIssuesPage';
 import FinancePage from "./pages/FinancePage";
 import SuppliersPage from "./pages/SuppliersPage";
 import StaffPage from "./pages/StaffPage";
@@ -75,6 +76,7 @@ const App = () => {
               <Route path="/" element={<Layout><SubscriptionGuard><PermissionGuard page="dashboard"><DashboardRouter /></PermissionGuard></SubscriptionGuard></Layout>} />
               <Route path="/inventory" element={<Layout><SubscriptionGuard><PermissionGuard page="inventory"><InventoryPage /></PermissionGuard></SubscriptionGuard></Layout>} />
               <Route path="/sales" element={<Layout><SubscriptionGuard><PermissionGuard page="sales"><SalesPage /></PermissionGuard></SubscriptionGuard></Layout>} />
+              <Route path="/sync-issues" element={<Layout><SyncIssuesPage /></Layout>} />
               <Route path="/finance" element={<Layout><SubscriptionGuard><PermissionGuard page="finance"><FinancePage /></PermissionGuard></SubscriptionGuard></Layout>} />
               <Route path="/suppliers" element={<Layout><SubscriptionGuard><PermissionGuard page="suppliers"><SuppliersPage /></PermissionGuard></SubscriptionGuard></Layout>} />
               <Route path="/customers" element={<Layout><SubscriptionGuard><PermissionGuard page="customers"><CustomersPage /></PermissionGuard></SubscriptionGuard></Layout>} />

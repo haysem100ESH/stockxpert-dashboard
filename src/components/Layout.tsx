@@ -7,7 +7,7 @@ import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/components/AppSidebar';
 import { LogOut, Settings, Sun, Moon, Zap } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
-import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import DeviceSignOutDialog from '@/components/sales/DeviceSignOutDialog';
 import SubscriptionStatus from '@/components/subscription/SubscriptionStatus';
 import ExpiringMedicinesAlert from '@/components/inventory/ExpiringMedicinesAlert';
 import InventoryAlertBadge from '@/components/inventory/InventoryAlertBadge';
@@ -58,9 +58,9 @@ export default function Layout({ children }: LayoutProps) {
     setShowSignOutConfirm(true);
   };
 
-  const confirmSignOut = async () => {
+  const confirmSignOut = async (exported?: string) => {
+    await signOut(exported);
     setShowSignOutConfirm(false);
-    await signOut();
   };
 
   return (
@@ -87,13 +87,11 @@ export default function Layout({ children }: LayoutProps) {
           </div>
         </div>
         
-        <ConfirmationDialog
+        <DeviceSignOutDialog
+          userId={user.id}
           open={showSignOutConfirm}
           onOpenChange={setShowSignOutConfirm}
-          title="Sign Out"
-          description="Are you sure you want to sign out?"
           onConfirm={confirmSignOut}
-          confirmText="Sign Out"
         />
       </SidebarProvider>
     </BranchProvider>

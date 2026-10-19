@@ -5,6 +5,10 @@ import { cacheMeta, readMeta } from '@/lib/offline/db';
 import type { CachedProfile } from '@/lib/offline/types';
 import { readPersistedSession } from '@/lib/offline/cachedSession';
 import { getOfflineState } from '@/lib/offline/store';
+import { setOfflineState } from '@/lib/offline/store';
+import { clearUserDeviceData } from '@/lib/offline/deviceSafety';
+import { withPosLock } from '@/lib/offline/network';
+import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 
 interface Profile {
@@ -28,7 +32,7 @@ interface AuthContextType {
   loading: boolean;
   signUp: (email: string, password: string, fullName: string, role?: 'owner' | 'staff' | 'developer') => Promise<{ error: any }>;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
-  signOut: () => Promise<void>;
+  signOut: (exported?: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
 
@@ -40,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let disposed = false;
@@ -182,16 +187,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error };
   };
 
-  const signOut = async () => {
-    return new Promise<void>((resolve) => {
-      const handleSignOut = async () => {
-        await supabase.auth.signOut();
-        setUser(null);
-        setSession(null);
-        setProfile(null);
-        resolve();
-      };
-      handleSignOut();
+  const signOut = async (exported?: string) => {
+    if (!user) return;
+    await withPosLock(async () => {
+      await clearUserDeviceData(user.id, exported);
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) throw error;
+      queryClient.clear();
+      setOfflineState({ records: [], pendingCount: 0, needsAttentionCount: 0, lastSuccessfulSync: undefined });
+      setUser(null); setSession(null); setProfile(null);
     });
   };
 

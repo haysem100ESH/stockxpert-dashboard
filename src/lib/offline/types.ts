@@ -32,6 +32,7 @@ export interface PosPayload {
   items: PosItem[];
 }
 export interface SaleSummary {
+  branch_name?: string;
   items: Array<{ name: string; quantity: number; line_total: number; unit_price: number; sale_type: string }>;
   total: number;
   customer_name?: string | null;
