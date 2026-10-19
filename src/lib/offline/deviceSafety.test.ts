@@ -1,9 +1,10 @@
 import 'fake-indexeddb/auto';
 import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import Dexie from 'dexie';
-import { beforeEach, afterAll, expect, test } from 'bun:test';
+import { beforeEach, afterAll, expect, mock, test } from 'bun:test';
 import { sale } from './rules.test';
 Dexie.dependencies.indexedDB = indexedDB; Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+mock.module('./network', () => ({ withPosLock: async (work: () => Promise<unknown>) => work() }));
 const { offlineDb } = await import('./db');
 const { clearUserDeviceData, exportDocument, exportFingerprint, retryUserSales, discardUserSale } = await import('./deviceSafety');
 const { settleSale } = await import('./queue');
