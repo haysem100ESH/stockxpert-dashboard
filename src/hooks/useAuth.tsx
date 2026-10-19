@@ -3,6 +3,8 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/db';
 import { cacheMeta, readMeta } from '@/lib/offline/db';
 import type { CachedProfile } from '@/lib/offline/types';
+import { readPersistedSession } from '@/lib/offline/cachedSession';
+import { getOfflineState } from '@/lib/offline/store';
 import { useToast } from '@/hooks/use-toast';
 
 interface Profile {
@@ -75,11 +77,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       // Avoid making auth calls from the auth callback's locked scope.
-      setTimeout(() => { if (!disposed) void hydrate(nextSession); }, 0);
+      setTimeout(() => { if (!disposed) void hydrate(nextSession ?? (!navigator.onLine ? readPersistedSession() : null)); }, 0);
     });
+    // An expired session can block SDK initialization while refresh is offline.
+    // The existing session + cached profile are only an offline UI identity;
+    // sync always validates/refreshes the real session before sending anything.
+    if (!navigator.onLine) void hydrate(readPersistedSession());
+    const fallbackTimer = setTimeout(() => {
+      if (!disposed && !getOfflineState().reachable) void hydrate(readPersistedSession());
+    }, 5500);
     void supabase.auth.getSession().then(({ data: { session: nextSession } }) => { if (!disposed) void hydrate(nextSession); })
       .catch(() => { if (!disposed) setLoading(false); });
-    return () => { disposed = true; subscription.unsubscribe(); };
+    return () => { disposed = true; clearTimeout(fallbackTimer); subscription.unsubscribe(); };
   }, []);
 
   const signUp = async (email: string, password: string, fullName: string, role: 'owner' | 'staff' | 'developer' = 'staff') => {
