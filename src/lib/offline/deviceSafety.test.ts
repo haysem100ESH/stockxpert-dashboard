@@ -56,8 +56,10 @@ test('server rejection reserves stock; discard requires note, audits, exports an
   expect(availableStock(12, 'item', await offlineDb.sales.toArray())).toBe(12);
   const records = await offlineDb.sales.toArray();
   expect(exportDocument(records, 'user').sales[0].discardNote).toBe('Refused sale reviewed');
-  await expect(clearUserDeviceData('user')).rejects.toThrow('Export');
-  await expect(clearUserDeviceData('user', oldExport)).rejects.toThrow('Export');
+  const cleanupError = await clearUserDeviceData('user').catch(error => error);
+  expect(cleanupError.message).toContain('Export');
+  const staleError = await clearUserDeviceData('user', oldExport).catch(error => error);
+  expect(staleError.message).toContain('Export');
   await retryUserSales('user', 'txn');
   expect((await offlineDb.sales.get('txn'))?.status).toBe('discarded');
   await clearUserDeviceData('user', exportFingerprint(records));
