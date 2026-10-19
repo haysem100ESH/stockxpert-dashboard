@@ -641,7 +641,7 @@ export default function SalesManagement() {
       // Freeze unknown/rejected retry payloads so one ID never describes two sales.
       const payload: PosPayload = transactionRef.current?.payload ?? {
         client_txn_id: transactionRef.current?.id ?? crypto.randomUUID(), branch_id: branchId,
-        sale_date: saleDate, device_created_at: new Date().toISOString(), payment_method: paymentMethod,
+        sale_date: saleDate, ...newSaleActivityFields(), payment_method: paymentMethod,
         total_amount: Number(total.toFixed(2)), discount_amount: Number(calculateDiscount().toFixed(2)),
         amount_paid: actualPaid, change_action: finalChangeAction as PosPayload['change_action'], extra_profit: extraProfit,
         customer_id: offline || selectedCustomerId === 'none' ? null : selectedCustomerId,
