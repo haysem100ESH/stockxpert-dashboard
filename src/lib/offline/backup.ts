@@ -97,7 +97,7 @@ export async function setUpBackup(userId: string) {
 
 /** Debounced writer: 2 s after changes, immediately on `flush`. */
 export function createBackupScheduler(run: () => Promise<unknown>, delay = 2000) {
-  let timer: ReturnType<typeof setTimeout> | undefined; let busy = Promise.resolve();
+  let timer: ReturnType<typeof setTimeout> | undefined; let busy: Promise<unknown> = Promise.resolve();
   const exec = () => { timer = undefined; busy = busy.then(() => run()).catch(() => {}); return busy; };
   return {
     schedule() { if (timer) clearTimeout(timer); timer = setTimeout(() => { void exec(); }, delay); },
