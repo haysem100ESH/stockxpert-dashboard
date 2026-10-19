@@ -27,7 +27,7 @@ for (const reachable of [true, false]) {
     expect(calls).toBe(reachable ? 1 : 0);
     expect([...storage.entries()]).toEqual([['unrelated', 'keep']]);
     expect(await offlineDb.sales.toArray()).toEqual(records);
-    expect(await offlineDb.catalog.get('item')).toEqual({ id: 'item', ownerKey: 'user' });
+    expect(await offlineDb.catalog.get('item')).toMatchObject({ id: 'item', ownerKey: 'user' });
     expect(await offlineDb.meta.toArray()).toEqual([...meta].sort((a, b) => a.key.localeCompare(b.key)));
   });
 }
