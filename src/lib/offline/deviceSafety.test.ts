@@ -35,15 +35,19 @@ test('new sale invalidates a previous export', async () => {
 test('server rejection reserves stock; discard requires note, audits, exports and gates cleanup', async () => {
   const record = sale('pending');
   await offlineDb.sales.add(record);
+  console.log('review trace: added');
   await settleSale(record, { status: 'rejected', reason_code: 'BRANCH_NOT_AUTHORIZED' });
+  console.log('review trace: settled');
   const refused = await offlineDb.sales.get('txn');
   expect(refused?.status).toBe('needs_attention');
   expect(refused?.issueId).toBeUndefined();
   expect(availableStock(12, 'item', await offlineDb.sales.toArray())).toBe(10);
   const oldExport = exportFingerprint(await offlineDb.sales.toArray());
   await expect(discardUserSale('user', 'txn', '  ')).rejects.toThrow('note');
+  console.log('review trace: blank note rejected');
   expect((await offlineDb.sales.get('txn'))?.status).toBe('needs_attention');
   await discardUserSale('user', 'txn', '  Refused sale reviewed  ');
+  console.log('review trace: discarded');
   const discarded = await offlineDb.sales.get('txn');
   expect(discarded?.status).toBe('discarded');
   expect(discarded?.discardNote).toBe('Refused sale reviewed');
