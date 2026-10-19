@@ -55,7 +55,7 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
       <Button variant="outline" asChild><label className="cursor-pointer"><Upload className="h-4 w-4 mr-2" />Restore from backup file
         <input type="file" accept="application/json,.json" className="sr-only" onChange={event => { void pickRestoreFile(event.target.files?.[0]); event.target.value = ''; }} /></label></Button>
     </div>
-    {backupSupported() && <p className="text-xs text-muted-foreground">Suggested folder: Documents\\PharmaXpert Backup</p>}
+    {backupSupported() && <p className="text-xs text-muted-foreground">Suggested folder: Documents\PharmaXpert Backup</p>}
     <p className="text-xs text-muted-foreground">Device storage used: {mb(storage?.usage)} of {mb(storage?.quota)}</p>
     <div className="overflow-y-auto flex-1 space-y-3">
       {loading ? <p className="text-muted-foreground">Loading…</p> : !records.length ? <p className="text-muted-foreground">No sales saved on this device.</p> : records.map(r => <article key={r.clientTxnId} className="rounded-md border p-4 space-y-2">
