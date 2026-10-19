@@ -1,5 +1,10 @@
 # Offline POS — part 1
 
+## Review fixes
+- [ ] Payload-derived retry mode and permanent-error classification
+- [ ] Device-only refusal retry/discard and export-protected history
+- [ ] Full Bun suite and automatic build verification (no browser verification)
+
 ## Part 2
 - [x] Pending sales sheet, retry and token-free export
 - [x] Online owner reconciliation and sidebar count
