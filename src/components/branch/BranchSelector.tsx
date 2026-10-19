@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/lib/db';
+import { cacheMeta, readMeta } from '@/lib/offline/db';
+import { useOfflineStatus } from '@/lib/offline/store';
 import { useAuth } from '@/hooks/useAuth';
 
 interface Branch {
@@ -20,9 +22,12 @@ export default function BranchSelector({ selectedBranch, onBranchChange, showAll
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const { profile } = useAuth();
+  const { reachable } = useOfflineStatus();
 
   const fetchBranches = useCallback(async () => {
+    if (!profile) { setBranches([]); setLoading(false); return; }
     try {
+      if (!reachable) { setBranches(await readMeta<Branch[]>(`branchDetails:${profile.id}`) ?? []); return; }
       let query = supabase
         .from('pharmacy_branches')
         .select('id, name, is_main_branch, branch_type')
@@ -36,18 +41,21 @@ export default function BranchSelector({ selectedBranch, onBranchChange, showAll
       const { data, error } = await query;
       if (error) throw error;
       setBranches(data || []);
+      await cacheMeta(`branchDetails:${profile.id}`, data || []);
+      await cacheMeta(`branches:${profile.id}`, (data || []).map((branch: Branch) => branch.id));
     } catch (error) {
-      console.error('Error fetching branches:', error);
+      setBranches(await readMeta<Branch[]>(`branchDetails:${profile.id}`).catch(() => undefined) ?? []);
     } finally {
       setLoading(false);
     }
-  }, [profile]);
+  }, [profile, reachable]);
 
   useEffect(() => {
     fetchBranches();
-  }, [fetchBranches]);
+  }, [fetchBranches, reachable]);
 
   useEffect(() => {
+    if (!reachable) return;
     const channel = supabase
       .channel('branch-selector-changes')
       .on(
@@ -65,7 +73,7 @@ export default function BranchSelector({ selectedBranch, onBranchChange, showAll
       supabase.removeChannel(channel);
       window.removeEventListener('branches-updated', handleBranchesUpdated);
     };
-  }, [fetchBranches]);
+  }, [fetchBranches, reachable]);
 
   if (loading) {
     return (

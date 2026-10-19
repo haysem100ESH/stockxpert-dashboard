@@ -1,4 +1,7 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { cacheMeta, readMeta } from '@/lib/offline/db';
+import { useOfflineStatus } from '@/lib/offline/store';
+import type { CachedBranch } from '@/lib/offline/catalog';
 import { useAuth } from './useAuth';
 import { supabase } from '@/lib/db';
 
@@ -20,6 +23,7 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
   const [userBranch, setUserBranch] = useState<string | null>(null);
   const [branchType, setBranchType] = useState<BranchType>('general');
   const { profile, user } = useAuth();
+  const { reachable } = useOfflineStatus();
 
   // Persist selection to localStorage (owner only)
   const setSelectedBranch = (branchId: string | null) => {
@@ -38,6 +42,7 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
       if (profile?.role === 'staff' && user?.id) {
         try {
           if (profile.branch_id) {
+            await cacheMeta(`branches:${profile.id}`, [profile.branch_id]);
             setUserBranch(profile.branch_id);
             setSelectedBranchState(profile.branch_id); // Staff can only see their branch
           }
@@ -47,6 +52,11 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
       } else if (profile?.role === 'owner' && profile?.id) {
         // Restore persisted branch selection, or default to "All Branches" (null)
         const persisted = localStorage.getItem(STORAGE_KEY);
+        if (!reachable) {
+          const allowed = await readMeta<string[]>(`branches:${profile.id}`).catch(() => undefined);
+          setSelectedBranchState(persisted && allowed?.includes(persisted) ? persisted : null);
+          return;
+        }
         if (persisted) {
           // Validate that the persisted branch still belongs to this owner
           const { data: match } = await supabase
@@ -72,13 +82,18 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
     };
 
     fetchUserBranch();
-  }, [profile, user]);
+  }, [profile, user, reachable]);
 
   // Fetch branch type whenever selectedBranch changes
   useEffect(() => {
     const fetchBranchType = async () => {
       if (!selectedBranch) {
         setBranchType('general'); // default to StockXpert when viewing all branches
+        return;
+      }
+      if (!reachable && profile) {
+        const branches = await readMeta<CachedBranch[]>(`branchDetails:${profile.id}`).catch(() => undefined);
+        setBranchType(branches?.find(branch => branch.id === selectedBranch)?.branch_type === 'general' ? 'general' : 'pharmacy');
         return;
       }
       const { data } = await supabase
@@ -91,7 +106,7 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
       }
     };
     fetchBranchType();
-  }, [selectedBranch]);
+  }, [selectedBranch, reachable, profile?.id]);
 
   return (
     <BranchContext.Provider value={{ 
