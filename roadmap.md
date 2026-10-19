@@ -1,9 +1,10 @@
 # Offline POS — part 1
 
 ## Review fixes
-- [ ] Payload-derived retry mode and permanent-error classification
-- [ ] Device-only refusal retry/discard and export-protected history
-- [ ] Full Bun suite and automatic build verification (no browser verification)
+- [x] Payload-derived retry mode and permanent-error classification
+- [x] Device-only refusal retry/discard and export-protected history
+- [x] Full Bun suite: 89 pass, 0 fail; automatic build OK; no browser verification
+- [ ] Separate production build verification — manual builds are disabled in this environment; automatic preview build passed
 
 ## Part 2
 - [x] Pending sales sheet, retry and token-free export
