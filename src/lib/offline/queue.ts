@@ -2,6 +2,12 @@ import { offlineDb } from './db';
 import { availableStock, hasCredit, reasonMessage } from './rules';
 import type { LocalSale, RpcResult } from './types';
 
+/** Caller holds the POS lock; resume only the signing-in cashier's interrupted work. */
+export async function recoverUserQueue(userId: string) {
+  await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'syncing')
+    .modify({ status: 'pending', nextAttemptAt: Date.now(), updatedAt: new Date().toISOString() });
+}
+
 export async function enqueueSale(record: LocalSale, validateStock: boolean) {
   await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, async () => {
     const existing = await offlineDb.sales.get(record.clientTxnId);
@@ -10,7 +16,7 @@ export async function enqueueSale(record: LocalSale, validateStock: boolean) {
       if (hasCredit(record.payload) || record.payload.customer_id) throw new Error(reasonMessage('CREDIT_NOT_ALLOWED_OFFLINE'));
       const allowed = (await offlineDb.meta.get(`branches:${record.userId}`))?.value as string[] | undefined;
       if (!allowed?.includes(record.branchId)) throw new Error(reasonMessage('BRANCH_NOT_AUTHORIZED'));
-      const reservations = await offlineDb.sales.where('branchId').equals(record.branchId).toArray();
+      const reservations = await offlineDb.sales.where('branchId').equals(record.branchId).and(r => r.userId === record.userId).toArray();
       const requested = new Map<string, number>();
       for (const item of record.payload.items) {
         if (!Number.isFinite(item.base_quantity) || item.base_quantity <= 0) throw new Error(reasonMessage('INVALID_QUANTITY'));

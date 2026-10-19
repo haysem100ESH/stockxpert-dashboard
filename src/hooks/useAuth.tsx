@@ -3,7 +3,8 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/db';
 import { cacheMeta, readMeta } from '@/lib/offline/db';
 import type { CachedProfile } from '@/lib/offline/types';
-import { readPersistedSession, clearPersistedSession } from '@/lib/offline/cachedSession';
+import { readPersistedSession } from '@/lib/offline/cachedSession';
+import { signOutSession } from '@/lib/offline/signOut';
 import { getOfflineState } from '@/lib/offline/store';
 import { setOfflineState } from '@/lib/offline/store';
 import { clearUserDeviceData } from '@/lib/offline/deviceSafety';
@@ -32,7 +33,8 @@ interface AuthContextType {
   loading: boolean;
   signUp: (email: string, password: string, fullName: string, role?: 'owner' | 'staff' | 'developer') => Promise<{ error: any }>;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
-  signOut: (exported?: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  removeMyDeviceData: (exported?: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
 
@@ -187,24 +189,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error };
   };
 
-  const signOut = async (exported?: string) => {
+  const finishSignOut = async () => {
+      const reachable = getOfflineState().reachable;
+      await signOutSession(reachable, () => supabase.auth.signOut({ scope: 'local' }));
+      localStorage.removeItem('selectedBranchId');
+      queryClient.clear();
+      setOfflineState({ records: [], pendingCount: 0, needsAttentionCount: 0, lastSuccessfulSync: undefined, backup: { state: 'not_set_up' } });
+      setUser(null); setSession(null); setProfile(null);
+      // Discard the SDK's in-memory credentials offline without a network call.
+      if (!reachable) window.location.assign('/auth');
+  };
+
+  const signOut = async () => {
+    if (!user) return;
+    await withPosLock(finishSignOut);
+  };
+
+  const removeMyDeviceData = async (exported?: string) => {
     if (!user) return;
     await withPosLock(async () => {
       await clearUserDeviceData(user.id, exported);
-      localStorage.removeItem('selectedBranchId');
-      if (!getOfflineState().reachable) {
-        clearPersistedSession();
-        queryClient.clear();
-        setUser(null); setSession(null); setProfile(null);
-        // Discard the SDK's in-memory credentials too, without a network call.
-        window.location.assign('/auth');
-        return;
-      }
-      const { error } = await supabase.auth.signOut({ scope: 'local' });
-      if (error) throw error;
-      queryClient.clear();
-      setOfflineState({ records: [], pendingCount: 0, needsAttentionCount: 0, lastSuccessfulSync: undefined });
-      setUser(null); setSession(null); setProfile(null);
+      await finishSignOut();
     });
   };
 
@@ -227,6 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signIn,
       signOut,
+      removeMyDeviceData,
       refreshProfile
     }}>
       {children}

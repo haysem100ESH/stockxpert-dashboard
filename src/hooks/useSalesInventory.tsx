@@ -163,7 +163,7 @@ export function useSalesInventory() {
     if (!profile || !branchIds.length) { setLocalLoading(false); return; }
     const sub = liveQuery(async () => ({
       rows: await offlineDb.catalog.where('ownerKey').equals(profile.id).and(row => branchIds.includes(row.branchId)).toArray(),
-      sales: await offlineDb.sales.where('branchId').anyOf(branchIds).toArray(),
+      sales: await offlineDb.sales.where('branchId').anyOf(branchIds).and(r => r.userId === profile.id).toArray(),
       times: await Promise.all(branchIds.map(id => readMeta<string>(`catalogSync:${profile.id}:${id}`))),
     })).subscribe({ next: ({ rows, sales, times }) => {
       setLocalRows(rows); setReservations(sales); setLocalLoading(false);
