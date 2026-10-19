@@ -11,6 +11,7 @@ import { Trophy, Calendar as CalendarIcon, Medal, RefreshCw } from 'lucide-react
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useActivitySnapshot } from '@/hooks/useActivitySnapshot';
+import { usePendingActivities } from '@/hooks/usePendingActivities';
 
 interface StaffRow { id: string; full_name: string | null; branch_id: string | null }
 interface BranchRow { id: string }
@@ -60,7 +61,7 @@ async function countActivitiesByStaff(staffIds: string[], range: { from?: Date; 
   return counts;
 }
 
-export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: StaffRow, range: LeaderboardRange) => void }) {
+export default function Leaderboard({ onSelectStaff, onRangeChange }: { onSelectStaff?: (s: StaffRow, range: LeaderboardRange) => void; onRangeChange?: (range: LeaderboardRange) => void }) {
   const { profile } = useAuth();
   const { selectedBranch } = useBranchContext();
   const [filter, setFilter] = useState<FilterKey>('today');
@@ -144,6 +145,8 @@ export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: Sta
     return { label: 'All Time' };
   }, [filter, customDate]);
 
+  useEffect(() => { onRangeChange?.(currentRange); }, [currentRange, onRangeChange]);
+  const pending = usePendingActivities([], currentRange);
   const subtitle = filter === 'custom' && customDate
     ? format(customDate, 'EEEE, MMM d, yyyy')
     : `Most active ${filterLabel(filter).toLowerCase()}`;
@@ -172,7 +175,7 @@ export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: Sta
           <div className="flex items-center gap-2">
             <div className="text-right hidden sm:block">
               <div className="text-xs text-muted-foreground">Total actions</div>
-              <div className="text-lg font-semibold tabular-nums">{total}</div>
+              <div className="text-lg font-semibold tabular-nums">{snapshot.cacheMissing ? '—' : total}{pending.length > 0 && <span className="ml-2 text-xs text-muted-foreground">+{pending.length} pending</span>}</div>
             </div>
             <Button
               variant="outline"

@@ -89,6 +89,8 @@ export function useGoalProgress(goal: StaffGoal, onComplete?: (g: StaffGoal) => 
   }, [count, goal, period.key, completedThisPeriod, user, onComplete, snapshot.offline, snapshot.loading, setData]);
 
   return {
+    cacheMissing: snapshot.cacheMissing,
+    banner: snapshot.banner,
     count,
     target: goal.target_count,
     percent: Math.min(100, Math.round((count / goal.target_count) * 100)),

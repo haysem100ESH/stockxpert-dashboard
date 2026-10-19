@@ -20,7 +20,7 @@ export default function ActivityCenterPage() {
   const [celebrating, setCelebrating] = useState<StaffGoal | null>(null);
 
   const { counts, cacheMissing: countsMissing } = useActivityCounts();
-  const { myGoals, loading: goalsLoading } = useStaffGoals();
+  const { myGoals, cacheMissing: goalsMissing } = useStaffGoals();
   const goals = myGoals();
   const { rows: serverRows, loading, banner, cacheMissing } = useActivityFeed({ date });
   const from = new Date(date); from.setHours(0, 0, 0, 0);
@@ -75,6 +75,7 @@ export default function ActivityCenterPage() {
           </div>
         </div>
       )}
+      {goalsMissing && <div className="text-sm text-muted-foreground">Goals were not loaded before going offline.</div>}
 
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Activity Log</h2>
