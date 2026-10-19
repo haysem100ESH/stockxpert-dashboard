@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/external-supabase/client';
+import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useStaffGoals, type StaffGoal } from '@/hooks/useStaffGoals';
 import { Card, CardContent } from '@/components/ui/card';

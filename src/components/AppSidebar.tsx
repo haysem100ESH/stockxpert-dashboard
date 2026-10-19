@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from '@/lib/router-compat';
+import { NavLink, useLocation } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { 
   LayoutDashboard, 

@@ -1,6 +1,6 @@
 import { useAuth } from '@/hooks/useAuth';
 import { useStaffPermissions, getPageNameForRoute } from '@/hooks/useStaffPermissions';
-import { useLocation } from '@/lib/router-compat';
+import { useLocation } from 'react-router-dom';
 
 /**
  * Returns true if the current user is in read-only mode for the current page.

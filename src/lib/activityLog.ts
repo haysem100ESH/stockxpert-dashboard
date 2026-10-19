@@ -1,4 +1,4 @@
-import { supabase } from '@/integrations/external-supabase/client';
+import { supabase } from '@/integrations/supabase/client';
 
 export type ActivityType =
   | 'create_item'

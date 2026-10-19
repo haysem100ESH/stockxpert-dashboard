@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { Navigate } from '@/lib/router-compat';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useStaffPermissions, type PageName } from '@/hooks/useStaffPermissions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
