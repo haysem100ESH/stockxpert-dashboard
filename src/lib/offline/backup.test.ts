@@ -100,3 +100,35 @@ test('restore skips existing ids, keeps payloads identical, maps statuses, repor
   expect(await offlineDb.sales.get('bad')).toBeUndefined();
   expect(await offlineDb.sales.count()).toBe(4);
 });
+// Chrome/Edge throw "TypeError: Illegal invocation" when a native window method is called without window as receiver.
+function windowWithPicker(pick: (options: unknown) => Promise<DirHandleLike>) {
+  const win: Record<string, unknown> = {};
+  win.showDirectoryPicker = function (this: unknown, options: unknown) {
+    if (this !== win) throw new TypeError('Illegal invocation');
+    return pick(options);
+  };
+  return win;
+}
+async function withFakeWindow<T>(win: Record<string, unknown>, work: () => Promise<T>): Promise<T> {
+  const g = globalThis as Record<string, unknown>;
+  const had = 'window' in g; const original = g.window;
+  g.window = win;
+  try { return await work(); } finally { if (had) g.window = original; else delete g.window; }
+}
+test('setUpBackup calls showDirectoryPicker with window as its receiver', async () => {
+  const dir = new FakeDir(); const seen: unknown[] = [];
+  const win = windowWithPicker(options => { seen.push(options); return Promise.resolve(dir); });
+  const status = await withFakeWindow(win, () => backup.setUpBackup('user'));
+  expect(seen).toEqual([{ id: 'pharmaxpert-backup', mode: 'readwrite', startIn: 'documents' }]);
+  expect(status.state).toBe('ok');
+  expect(await backup.readBackupDir('user')).toBe(dir);
+  expect([...dir.files.keys()].some(n => n.endsWith('latest.json'))).toBe(true);
+});
+test('cancelling the folder chooser keeps the backup state and stores nothing', async () => {
+  setOfflineState({ backup: { state: 'paused' } });
+  const win = windowWithPicker(() => Promise.reject(new DOMException('The user aborted a request.', 'AbortError')));
+  const status = await withFakeWindow(win, () => backup.setUpBackup('user'));
+  expect(status).toEqual({ state: 'paused' });
+  expect(getOfflineState().backup).toEqual({ state: 'paused' });
+  expect(await backup.readBackupDir('user')).toBeUndefined();
+});
