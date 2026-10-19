@@ -128,8 +128,8 @@ test('setUpBackup calls showDirectoryPicker with window as its receiver', async 
 test('cancelling the folder chooser keeps the backup state and stores nothing', async () => {
   setOfflineState({ backup: { state: 'paused' } });
   const win = windowWithPicker(() => Promise.reject(new DOMException('The user aborted a request.', 'AbortError')));
-  const status = await withFakeWindow(win, () => backup.setUpBackup('user'));
+  const status = await withFakeWindow(win, () => backup.setUpBackup('cancel-user'));
   expect(status).toEqual({ state: 'paused' });
   expect(getOfflineState().backup).toEqual({ state: 'paused' });
-  expect(await backup.readBackupDir('user')).toBeUndefined();
+  expect(await backup.readBackupDir('cancel-user')).toBeUndefined();
 });
