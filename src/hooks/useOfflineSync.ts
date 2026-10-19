@@ -7,7 +7,7 @@ import { callPos, checkReachability, validSession, withPosLock } from '@/lib/off
 import { getOfflineState, setOfflineState } from '@/lib/offline/store';
 import { retryMode, SYNCED_RETENTION_MS } from '@/lib/offline/rules';
 import { syncSale } from '@/lib/offline/syncSale';
-import { settleSale } from '@/lib/offline/queue';
+import { recoverUserQueue, settleSale } from '@/lib/offline/queue';
 import { saleEffects } from '@/lib/offline/effects';
 import { fetchCatalog, replaceCatalog } from '@/lib/offline/catalog';
 import type { RpcResult } from '@/lib/offline/types';
@@ -39,8 +39,8 @@ export function useOfflineSync() {
       running = true;
       try {
         await withPosLock(async () => {
-          if (recover) await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'syncing')
-            .modify({ status: 'pending', updatedAt: new Date().toISOString() });
+          if (disposed) return;
+          if (recover) await recoverUserQueue(userId);
           const cutoff = new Date(Date.now() - SYNCED_RETENTION_MS).toISOString();
           await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'synced' && !!r.syncedAt && r.syncedAt < cutoff).delete();
           if (!await checkReachability() || !await validSession(userId)) return;

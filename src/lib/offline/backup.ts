@@ -4,6 +4,7 @@ import { SYNCED_RETENTION_MS } from './rules';
 import { getOfflineState, setOfflineState, type BackupStatus } from './store';
 import { addisDayString } from '@/lib/timezone';
 import type { LocalSale } from './types';
+import { withPosLock } from './network';
 
 export const BACKUP_FORMAT = 'pharmaxpert-backup';
 export const BACKUP_VERSION = 1;
@@ -25,6 +26,7 @@ export const backupSupported = () => typeof window !== 'undefined' && typeof (wi
 export const backupDirKey = (userId: string) => `backupDir:${userId}`;
 // Live handles are kept in memory too; Dexie keeps the structured clone across restarts.
 const liveDirs = new Map<string, DirHandleLike>();
+export function forgetBackupDir(userId: string) { liveDirs.delete(userId); }
 export async function rememberBackupDir(userId: string, dir: DirHandleLike) { liveDirs.set(userId, dir); await writeMeta(backupDirKey(userId), dir); }
 export async function readBackupDir(userId: string) { return liveDirs.get(userId) ?? await readMeta<DirHandleLike>(backupDirKey(userId)); }
 
@@ -68,6 +70,7 @@ const setBackup = (backup: BackupStatus) => setOfflineState({ backup });
 /** Writes one backup. Never throws: failures only update the indicator. */
 export async function runBackup(userId: string): Promise<BackupStatus> {
   try {
+    await withPosLock(async () => {
     const dir = await readBackupDir(userId);
     if (!dir) { setBackup({ state: 'not_set_up' }); return getOfflineState().backup; }
     const permission = dir.queryPermission ? await dir.queryPermission({ mode: 'readwrite' }) : 'granted';
@@ -77,6 +80,7 @@ export async function runBackup(userId: string): Promise<BackupStatus> {
     const now = new Date();
     await writeBackupFiles(dir, buildBackupDocument(records, userId, await getDeviceId(), now), now);
     setBackup({ state: 'ok', at: now.toISOString() });
+    });
   } catch (e) { setBackup({ state: 'failing', reason: reasonOf(e) }); }
   return getOfflineState().backup;
 }

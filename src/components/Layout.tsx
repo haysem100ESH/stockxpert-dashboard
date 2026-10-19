@@ -61,8 +61,8 @@ export default function Layout({ children }: LayoutProps) {
     setShowSignOutConfirm(true);
   };
 
-  const confirmSignOut = async (exported?: string) => {
-    await signOut(exported);
+  const confirmSignOut = async () => {
+    await signOut();
     setShowSignOutConfirm(false);
   };
 

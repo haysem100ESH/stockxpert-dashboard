@@ -9,6 +9,9 @@ export function exportFingerprint(records: LocalSale[]) {
 export async function userSales(userId: string) {
   return (await offlineDb.sales.where('userId').equals(userId).sortBy('createdAt')).reverse();
 }
+export async function otherUserUnresolvedCount(userId: string) {
+  return offlineDb.sales.filter(r => r.userId !== userId && isUnresolved(r)).count();
+}
 // Explicit allowlist: never export auth storage, cached profiles or credentials.
 export const EXPORT_FIELDS = ['clientTxnId', 'userId', 'branchId', 'payload', 'mode', 'status', 'attempts', 'lastError',
   'reasonCode', 'reasonDetail', 'serverSaleId', 'issueId', 'summary', 'createdAt', 'updatedAt', 'syncedAt',
@@ -47,6 +50,7 @@ export async function discardUserSale(userId: string, txnId: string, note: strin
     await offlineDb.sales.update(txnId, { status: 'discarded', discardNote: note.trim(), discardedBy: userId, discardedAt: now, updatedAt: now });
   }));
 }
+/** Explicit retirement only. Caller holds the POS lock through cleanup and sign-out. */
 export async function clearUserDeviceData(userId: string, exported?: string) {
   await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, async () => {
     const records = await userSales(userId);
