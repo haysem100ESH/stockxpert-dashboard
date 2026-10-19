@@ -1,5 +1,5 @@
 import { ReactNode, useState, useEffect } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -21,6 +21,10 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useTheme } from 'next-themes';
 import { useAdvancedMode } from '@/hooks/useAdvancedMode';
 import { Switch } from '@/components/ui/switch';
+import { useOfflineSync } from '@/hooks/useOfflineSync';
+import { useOfflineStatus } from '@/lib/offline/store';
+import OfflineStatusBadge from '@/components/sales/OfflineStatusBadge';
+import { Card, CardContent } from '@/components/ui/card';
 
 interface LayoutProps {
   children: ReactNode;
@@ -29,6 +33,9 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const { user, profile, signOut, loading } = useAuth();
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
+  useOfflineSync();
+  const { reachable } = useOfflineStatus();
+  const location = useLocation();
 
   // Native-feeling pull-to-refresh on touch devices.
   usePullToRefresh(!!user);
@@ -44,6 +51,8 @@ export default function Layout({ children }: LayoutProps) {
   if (!user) {
     return <Navigate to="/auth" replace />;
   }
+
+  if (!profile) return <div className="min-h-screen flex items-center justify-center p-4"><Card><CardContent className="p-6">Connect to the internet to verify your account before using Sales on this device.</CardContent></Card></div>;
 
   const handleSignOut = () => {
     setShowSignOutConfirm(true);
@@ -68,13 +77,13 @@ export default function Layout({ children }: LayoutProps) {
             />
             
             <main className="flex-1 overflow-x-hidden overflow-y-auto p-2 sm:p-4 max-w-full">
-              {(profile?.role === 'owner' || profile?.role === 'staff') && <SubscriptionStatus />}
-              <ExpiringMedicinesAlert />
-              {children}
+              {reachable && (profile?.role === 'owner' || profile?.role === 'staff') && <SubscriptionStatus />}
+              {reachable && <ExpiringMedicinesAlert />}
+              {!reachable && location.pathname !== '/sales' ? <Card><CardContent className="p-6">This page needs an internet connection</CardContent></Card> : children}
             </main>
             
             {/* AI Smart Assistant */}
-            {profile?.role !== 'developer' && <SmartAssistant />}
+            {reachable && profile?.role !== 'developer' && <SmartAssistant />}
           </div>
         </div>
         
@@ -126,15 +135,17 @@ function LayoutHeader({ profile, user, onSignOut }: { profile: any, user: any, o
   const { selectedBranch, setSelectedBranch } = useBranchContext();
   const branding = useBranding();
   const navigate = useNavigate();
+  const { reachable } = useOfflineStatus();
 
   useEffect(() => {
     document.title = branding.systemName;
   }, [branding.systemName]);
   
   return (
-    <header className="border-b bg-card h-14 flex items-center justify-between px-4">
-      <div className="flex items-center space-x-4">
+    <header className="border-b bg-card min-h-14 flex flex-wrap items-center justify-between gap-2 px-2 py-2 sm:px-4">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-4">
         <SidebarTrigger className="ml-0" />
+        <OfflineStatusBadge />
         
         {/* Branch Selector for Owners */}
         {profile?.role === 'owner' && (
@@ -148,20 +159,20 @@ function LayoutHeader({ profile, user, onSignOut }: { profile: any, user: any, o
       
       <div className="flex items-center space-x-2 sm:space-x-3">
         <AdvancedModeToggle />
-        {profile?.role !== 'developer' && <InventoryAlertBadge />}
+        {reachable && profile?.role !== 'developer' && <InventoryAlertBadge />}
         <ThemeToggle />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center space-x-2 cursor-pointer rounded-full hover:bg-muted p-1 transition-colors">
+            <Button variant="ghost" className="flex items-center space-x-2 rounded-full p-1 h-auto">
               <Avatar className="h-8 w-8">
                 <AvatarFallback>
-                  {profile?.full_name.charAt(0).toUpperCase() || 'U'}
+                  {profile?.full_name?.charAt(0).toUpperCase() || 'U'}
                 </AvatarFallback>
               </Avatar>
               <span className="text-sm font-medium hidden sm:block">
                 {profile?.full_name || user.email}
               </span>
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
