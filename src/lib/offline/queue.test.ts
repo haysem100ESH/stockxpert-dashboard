@@ -9,6 +9,7 @@ Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 const { offlineDb } = await import('./db');
 const { enqueueSale, settleSale } = await import('./queue');
+const { replaceCatalog } = await import('./catalog');
 
 beforeEach(async () => {
   await offlineDb.open();
@@ -19,14 +20,61 @@ beforeEach(async () => {
 });
 afterAll(async () => { await offlineDb.delete(); });
 describe('durable checkout transaction', () => {
-  test('other-cashier reservations in the same branch do not prevent current cashier checkout', async () => {
-    const other = { ...sale('pending', 'other-txn'), userId: 'other' };
-    other.payload = { ...other.payload, items: [{ ...other.payload.items[0], base_quantity: 12 }] };
+  for (const status of ['pending', 'syncing', 'needs_attention'] as const) {
+    test(`other-cashier ${status} reservation of 5 leaves 7 and prevents checkout above remainder`, async () => {
+      const other = { ...sale(status, 'other-txn'), userId: 'other' };
+      other.payload = { ...other.payload, items: [{ ...other.payload.items[0], base_quantity: 5 }] };
+      await offlineDb.sales.add(other);
+      // Same branch-scoped read used by the Sales inventory display, with no cashier filter.
+      const shared = await offlineDb.sales.where('branchId').anyOf(['branch']).toArray();
+      expect(availableStock(12, 'item', shared)).toBe(7);
+      const current = sale('pending');
+      current.payload = { ...current.payload, items: [{ ...current.payload.items[0], base_quantity: 8 }] };
+      await expect(enqueueSale(current, true)).rejects.toThrow('Not enough sellable stock');
+      expect(await offlineDb.sales.count()).toBe(1);
+      current.payload.items[0].base_quantity = 7;
+      await enqueueSale(current, true);
+      expect(availableStock(12, 'item', await offlineDb.sales.where('branchId').equals('branch').toArray())).toBe(0);
+      expect((await offlineDb.sales.get('other-txn'))?.payload).toEqual(other.payload);
+    });
+  }
+  for (const status of ['discarded', 'synced', 'voided'] as const) {
+    test(`other-cashier ${status} record does not reduce current cashier availability`, async () => {
+      const other = { ...sale(status, 'other-txn'), userId: 'other' };
+      other.payload = { ...other.payload, items: [{ ...other.payload.items[0], base_quantity: 5 }] };
+      await offlineDb.sales.add(other);
+      expect(availableStock(12, 'item', await offlineDb.sales.where('branchId').anyOf(['branch']).toArray())).toBe(12);
+      const current = sale('pending');
+      current.payload = { ...current.payload, items: [{ ...current.payload.items[0], base_quantity: 12 }] };
+      await enqueueSale(current, true);
+      expect(await offlineDb.sales.count()).toBe(2);
+    });
+  }
+  test('other-cashier branch Y reservation does not affect branch X display or checkout', async () => {
+    const other = { ...sale('pending', 'other-txn'), userId: 'other', branchId: 'branch-y' };
+    other.payload = { ...other.payload, branch_id: 'branch-y', items: [{ ...other.payload.items[0], base_quantity: 5 }] };
     await offlineDb.sales.add(other);
-    await enqueueSale(sale('pending'), true);
-    const own = await offlineDb.sales.where('userId').equals('user').toArray();
-    expect(availableStock(12, 'item', own)).toBe(10);
-    expect((await offlineDb.sales.get('other-txn'))?.payload).toEqual(other.payload);
+    expect(availableStock(12, 'item', await offlineDb.sales.where('branchId').anyOf(['branch']).toArray())).toBe(12);
+    const current = sale('pending');
+    current.payload = { ...current.payload, items: [{ ...current.payload.items[0], base_quantity: 12 }] };
+    await enqueueSale(current, true);
+    expect(await offlineDb.sales.count()).toBe(2);
+  });
+  test('settled other-cashier sale and later server catalog refresh never double-subtract stock', async () => {
+    const other = { ...sale('pending', 'other-txn'), userId: 'other' };
+    other.payload = { ...other.payload, items: [{ ...other.payload.items[0], base_quantity: 5 }] };
+    await offlineDb.sales.add(other);
+    expect(availableStock(12, 'item', await offlineDb.sales.toArray())).toBe(7);
+    await settleSale(other, { status: 'synced', sale_id: 'server-sale' });
+    expect((await offlineDb.catalog.get('item'))?.serverAvailable).toBe(7);
+    expect(availableStock(7, 'item', await offlineDb.sales.toArray())).toBe(7);
+    const snapshot = await offlineDb.catalog.get('item');
+    if (!snapshot) throw new Error('Missing catalog snapshot');
+    // Server snapshot already reflects the sale: replace rather than subtract again.
+    await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog(['branch'], 'user', [{ ...snapshot, serverAvailable: 7 }]));
+    expect((await offlineDb.catalog.get('item'))?.serverAvailable).toBe(7);
+    expect(availableStock(7, 'item', await offlineDb.sales.where('branchId').anyOf(['branch']).toArray())).toBe(7);
+    expect((await offlineDb.sales.get('other-txn'))?.status).toBe('synced');
   });
   test('committed sale reserves stock and survives reopen', async () => {
     await enqueueSale(sale('pending'), true); offlineDb.close(); await offlineDb.open();

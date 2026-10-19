@@ -97,7 +97,7 @@ test('exported cleanup removes only departing user sales, catalog and metadata',
   expect((await offlineDb.catalog.toArray()).map(r => r.id)).toEqual(['other']);
   expect((await offlineDb.meta.toArray()).map(r => r.key)).toEqual(['backupDir:other', 'deviceId', 'profile:other']);
 });
-test('other cashiers are count-only and excluded from current list, export, backup, totals and reservations', async () => {
+test('other cashiers are count-only and excluded from current list, export, backup and totals while sharing stock reservations', async () => {
   const own = sale('pending');
   const others = ['pending', 'syncing', 'needs_attention', 'discarded', 'synced', 'voided'].map((s, i) => ({ ...sale(s as Parameters<typeof sale>[0], `other-${i}`), userId: 'other' }));
   await offlineDb.sales.bulkAdd([own, ...others]);
@@ -105,8 +105,8 @@ test('other cashiers are count-only and excluded from current list, export, back
   const list = await userSales('user');
   expect(list.map(r => r.clientTxnId)).toEqual(['txn']);
   expect(list.reduce((n, r) => n + r.summary.total, 0)).toBe(20);
-  expect(availableStock(12, 'item', list)).toBe(10);
   const all = await offlineDb.sales.toArray();
+  expect(availableStock(12, 'item', all)).toBe(4);
   expect(exportDocument(all, 'user').sales.map(r => r.clientTxnId)).toEqual(['txn']);
   expect(buildBackupDocument(all, 'user', 'dev').sales.map(r => r.clientTxnId)).toEqual(['txn']);
 });

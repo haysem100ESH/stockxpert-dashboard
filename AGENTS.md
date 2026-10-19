@@ -12,3 +12,4 @@
 - Keep device-only discard audit fields in the versioned Dexie sale record and retirement export gate; this preserves recovery history without reserving stock.
 - Keep storage-persistence checks and the File System Access backup in `src/lib/offline/storageGuard.ts`/`backup.ts`; backup is best-effort, serialized with retirement, and never throws into checkout or sync; restore accepts only the signed-in user's files to preserve seller attribution.
 - Keep session-only sign-out in `src/lib/offline/signOut.ts`, interrupted-queue recovery in the queue module, and other-cashier notices count-only; testable helpers preserve identity and stock isolation across sign-ins.
+- Load stock reservations by branch across all cashiers, while keeping account records and sync user-scoped; physical stock stays shared after sign-out.
