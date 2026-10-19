@@ -26,7 +26,7 @@ describe('offline POS rules', () => {
   for (const status of ['pending', 'syncing', 'needs_attention'] as const) {
     test(`${status} reserves base quantity`, () => { expect(availableStock(12, 'item', [sale(status)])).toBe(10); });
   }
-  for (const status of ['synced', 'voided'] as const) {
+  for (const status of ['synced', 'voided', 'discarded'] as const) {
     test(`${status} no longer reserves`, () => { expect(availableStock(12, 'item', [sale(status)])).toBe(12); });
   }
   test('partial payment is a credit component', () => { expect(hasCredit({ ...payload, amount_paid: 19 })).toBe(true); });

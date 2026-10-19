@@ -19,10 +19,11 @@ mock.module('./store', () => ({ signalSync: () => {} }));
 Object.assign(globalThis, { window: { dispatchEvent: () => true } });
 const { offlineDb } = await import('./db');
 const { submitSale } = await import('./submitSale');
+const { syncSale } = await import('./syncSale');
 beforeEach(async () => {
   calls.length = 0; effectCount = 0; reachable = true;
   response = { data: { status: 'synced', sale_id: 'server-id' }, error: null };
-  await offlineDb.sales.clear(); await offlineDb.catalog.clear(); await offlineDb.meta.clear();
+  await offlineDb.open(); await offlineDb.sales.clear(); await offlineDb.catalog.clear(); await offlineDb.meta.clear();
   await offlineDb.meta.put({ key: 'branches:user', value: ['branch'] });
   await offlineDb.catalog.put({ id: 'item', medicine_id: 'med', name: 'Medicine', branchId: 'branch', branch_id: 'branch', ownerKey: 'user',
     selling_price: 20, purchase_price: 10, stock_quantity: 12, serverAvailable: 12, packaging: null, cachedAt: '2026-10-19T08:00:00Z' });
@@ -47,6 +48,12 @@ test('unknown fully paid online result saves original payload and does not call 
   await submitSale(record.payload, 'user', record.summary);
   expect(calls.length).toBe(1);
   expect((await offlineDb.sales.get('txn'))?.payload).toEqual(record.payload);
+  expect((await offlineDb.sales.get('txn'))?.mode).toBe('offline');
+  const queued = await offlineDb.sales.get('txn');
+  if (!queued) throw new Error('Missing queued sale');
+  response = { data: { status: 'synced', duplicate: true, sale_id: 'server-id' }, error: null };
+  await syncSale(queued);
+  expect(calls[1]).toEqual({ payload: record.payload, mode: 'offline' });
 });
 test('unknown online credit result is queued in online mode with warning', async () => {
   response = { data: null, error: new Error('Timeout') };
@@ -55,6 +62,21 @@ test('unknown online credit result is queued in online mode with warning', async
   expect(result.message).toContain('do not re-enter it');
   expect((await offlineDb.sales.get('txn'))?.mode).toBe('online');
   expect((await offlineDb.sales.get('txn'))?.payload.client_txn_id).toBe('txn');
+  const queued = await offlineDb.sales.get('txn');
+  if (!queued) throw new Error('Missing credit sale');
+  response = { data: { status: 'synced', sale_id: 'server-id' }, error: null };
+  await syncSale(queued);
+  expect(calls[1]).toEqual({ payload: record.payload, mode: 'online' });
+});
+test('permanent checkout error still persists unchanged payload before returning', async () => {
+  response = { data: null, error: { code: '23514', message: 'constraint failed' } };
+  const record = sale('pending');
+  const result = await submitSale(record.payload, 'user', record.summary);
+  expect(result.message).toContain('server refused this attempt: constraint failed');
+  const queued = await offlineDb.sales.get('txn');
+  expect(queued?.payload).toEqual(record.payload);
+  expect(queued?.status).toBe('pending');
+  expect(queued?.lastError).toBe('constraint failed');
 });
 test('offline checkout commits locally without attempting RPC', async () => {
   reachable = false; const record = sale('pending');

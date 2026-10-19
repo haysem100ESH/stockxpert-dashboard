@@ -3,6 +3,7 @@ import type { LocalSale, PosPayload } from './types';
 export const RESERVING_STATUSES = ['pending', 'syncing', 'needs_attention'] as const;
 export const SYNCED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const hasCredit = (p: PosPayload) => p.amount_paid < p.total_amount || p.deduct_debt_amount > 0;
+export const retryMode = (p: PosPayload): 'online' | 'offline' => hasCredit(p) ? 'online' : 'offline';
 export const retryDelay = (attempts: number) => Math.min(300_000, 30_000 * 2 ** Math.max(0, attempts - 1));
 export function availableStock(serverAvailable: number, itemId: string, records: LocalSale[]): number {
   const reserved = records.filter(s => RESERVING_STATUSES.some(status => status === s.status))
@@ -35,9 +36,10 @@ const messages: Record<string, string> = {
   EMPTY_SALE: 'Add at least one item to the cart.',
   MISSING_IDS: 'The sale is missing item or branch details. Refresh and try again.',
   UNKNOWN_SELLER: 'Your seller account could not be verified. Sign in again.',
+  SELLER_NOT_IN_PHARMACY: 'The seller of this sale does not belong to this pharmacy. Void it with a note.',
 };
 export function reasonMessage(code?: string, detail?: Record<string, unknown>): string {
-  const message = messages[code ?? ''] ?? 'This sale needs review. Contact the owner before entering it again.';
+  const message = messages[code ?? ''] ?? `This sale needs review${code ? ` (code: ${code})` : ''}. Contact the owner before entering it again.`;
   const item = typeof detail?.item === 'string' ? ` Item: ${detail.item}.` : '';
   const available = typeof detail?.available === 'number' ? ` Available: ${detail.available}.` : '';
   const price = typeof detail?.current_unit_price === 'number' ? ` Current unit price: ${detail.current_unit_price.toFixed(2)}.` : '';
