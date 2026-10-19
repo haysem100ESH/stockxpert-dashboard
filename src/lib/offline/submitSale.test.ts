@@ -90,4 +90,30 @@ test('duplicate server result never repeats post-sale effects', async () => {
   response = { data: { status: 'synced', sale_id: 'server-id', duplicate: true }, error: null };
   const record = sale('pending'); await submitSale(record.payload, 'user', record.summary);
   expect(effectCount).toBe(0);
+});const { resetStorageSession, OFFLINE_BLOCKED_MESSAGE } = await import('./storageGuard');
+function fakeStorage(persisted: boolean, quota: number) {
+  Object.defineProperty(globalThis.navigator, 'storage', { configurable: true,
+    value: { persisted: async () => persisted, persist: async () => persisted, estimate: async () => ({ quota, usage: 1 }) } });
+}
+test('private-like window blocks offline checkout and keeps nothing', async () => {
+  fakeStorage(false, 100 * 1024 * 1024); resetStorageSession(); storeState = {};
+  reachable = false; const record = sale('pending');
+  await expect(submitSale(record.payload, 'user', record.summary)).rejects.toThrow(OFFLINE_BLOCKED_MESSAGE);
+  expect(await offlineDb.sales.count()).toBe(0);
+});
+test('unusable IndexedDB (storageError) blocks offline checkout', async () => {
+  fakeStorage(true, 10e9); resetStorageSession(); storeState = { storageError: 'Local storage is unavailable.' };
+  reachable = false; const record = sale('pending');
+  await expect(submitSale(record.payload, 'user', record.summary)).rejects.toThrow(OFFLINE_BLOCKED_MESSAGE);
+});
+test('online checkout is unaffected by a private-like window', async () => {
+  fakeStorage(false, 100 * 1024 * 1024); resetStorageSession(); storeState = {};
+  const record = sale('pending');
+  expect((await submitSale(record.payload, 'user', record.summary)).status).toBe('synced');
+});
+test('not persisted but large quota still allows offline save and flushes backup', async () => {
+  fakeStorage(false, 10e9); resetStorageSession(); storeState = {}; backupSignals = 0;
+  reachable = false; const record = sale('pending');
+  expect((await submitSale(record.payload, 'user', record.summary)).status).toBe('saved');
+  expect(backupSignals).toBe(1);
 });
