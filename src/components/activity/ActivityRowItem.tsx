@@ -136,6 +136,7 @@ export default function ActivityRowItem({ row }: { row: ActivityRow }) {
             <span className="font-medium truncate">{title}</span>
             <Badge variant="outline" className="text-[10px] py-0 px-1.5">{meta.label}</Badge>
           </div>
+          {row.pendingBadge && <Badge variant="outline" className="mt-1 whitespace-normal text-xs">{row.pendingBadge}</Badge>}
           <div className="text-xs text-muted-foreground">
             {(() => {
               // For sale rows, prefer the business sale_date stored in metadata

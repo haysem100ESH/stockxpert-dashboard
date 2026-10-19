@@ -20,6 +20,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { addisDayString } from '@/lib/timezone';
 import { isMeasurable } from '@/lib/itemTypes';
 import { submitSale, UnknownOutcomeStorageError } from '@/lib/offline/submitSale';
+import { newSaleActivityFields } from '@/lib/offline/activity';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { acknowledgeWarning, needsProtectionWarning, NOT_PROTECTED_WARNING, offlineBlockReason, warningAcknowledged } from '@/lib/offline/storageGuard';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';

@@ -82,7 +82,7 @@ export default function Layout({ children }: LayoutProps) {
             <main className="flex-1 overflow-x-hidden overflow-y-auto p-2 sm:p-4 max-w-full">
               {reachable && (profile?.role === 'owner' || profile?.role === 'staff') && <SubscriptionStatus />}
               {reachable && <ExpiringMedicinesAlert />}
-              {!reachable && location.pathname !== '/sales' ? <Card><CardContent className="p-6">This page needs an internet connection</CardContent></Card> : children}
+              {!reachable && !['/sales', '/activity', '/owner/activity'].includes(location.pathname) ? <Card><CardContent className="p-6">This page needs an internet connection</CardContent></Card> : children}
             </main>
             
             {/* AI Smart Assistant */}

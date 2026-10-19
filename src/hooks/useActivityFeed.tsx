@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
+import { useActivitySnapshot } from './useActivitySnapshot';
 
 export interface ActivityRow {
+  client_txn_id?: string | null;
+  pendingBadge?: string;
   id: string;
   user_id: string;
   owner_id: string;
@@ -28,8 +31,6 @@ interface Options {
 
 export function useActivityFeed(options: Options = {}) {
   const { profile, user } = useAuth();
-  const [rows, setRows] = useState<ActivityRow[]>([]);
-  const [loading, setLoading] = useState(false);
 
   const computeRange = useCallback(() => {
     if (options.from && options.to) return { from: options.from, to: options.to };
@@ -41,9 +42,8 @@ export function useActivityFeed(options: Options = {}) {
     return null;
   }, [options.from, options.to, options.date]);
 
-  const load = useCallback(async () => {
-    if (!user) return;
-    setLoading(true);
+  const load = useCallback(async (): Promise<ActivityRow[]> => {
+    if (!user) return [];
     let q = (supabase as any).from('activity_log').select('*').order('created_at', { ascending: false }).limit(options.limit ?? 200);
 
     if (options.userId) q = q.eq('user_id', options.userId);
@@ -57,15 +57,18 @@ export function useActivityFeed(options: Options = {}) {
     }
 
     const { data, error } = await q;
-    if (!error) setRows((data || []) as ActivityRow[]);
-    setLoading(false);
+    if (error) throw error;
+    return (data || []) as ActivityRow[];
   }, [user, options.userId, options.branchId, options.ownerScope, options.limit, computeRange]);
 
-  useEffect(() => { load(); }, [load]);
+  const range = computeRange();
+  const scope = `feed:${JSON.stringify([options.userId ?? (options.ownerScope ? 'owner' : user?.id), options.branchId, options.ownerScope, options.limit ?? 200, range?.from.toISOString(), range?.to.toISOString()])}`;
+  const snapshot = useActivitySnapshot<ActivityRow[]>(user?.id, scope, [], load);
+  const { data: rows, loading, setData: setRows } = snapshot;
 
   // Realtime subscription
   useEffect(() => {
-    if (!user) return;
+    if (!user || snapshot.offline) return;
     const channel = (supabase as any)
       .channel(`activity-feed-${user.id}-${options.userId ?? 'self'}-${options.branchId ?? 'all'}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_log' }, (payload: any) => {
@@ -79,11 +82,11 @@ export function useActivityFeed(options: Options = {}) {
           const ts = new Date(r.created_at);
           if (ts < range.from || ts >= range.to) return;
         }
-        setRows((cur) => [r, ...cur].slice(0, options.limit ?? 200));
+        setRows((cur) => [r, ...cur.filter(existing => existing.id !== r.id)].slice(0, options.limit ?? 200));
       })
       .subscribe();
     return () => { (supabase as any).removeChannel(channel); };
-  }, [user, profile, options.userId, options.branchId, options.ownerScope, options.limit, computeRange]);
+  }, [user, profile, options.userId, options.branchId, options.ownerScope, options.limit, computeRange, snapshot.offline, setRows]);
 
-  return { rows, loading, refetch: load };
+  return { rows, loading, refetch: snapshot.refetch, banner: snapshot.banner, cacheMissing: snapshot.cacheMissing };
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
+import { useActivitySnapshot } from './useActivitySnapshot';
 
 function startOfDay(d = new Date()) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function startOfWeek(d = new Date()) { const x = startOfDay(d); const day = x.getDay(); const diff = (day === 0 ? -6 : 1 - day); x.setDate(x.getDate()+diff); return x; }
@@ -11,10 +12,9 @@ interface Counts { today: number; week: number; month: number; }
 export function useActivityCounts(userId?: string) {
   const { user } = useAuth();
   const uid = userId ?? user?.id;
-  const [counts, setCounts] = useState<Counts>({ today: 0, week: 0, month: 0 });
 
   const load = useCallback(async () => {
-    if (!uid) return;
+    if (!uid) return { today: 0, week: 0, month: 0 };
     const now = new Date();
     const fromMonth = startOfMonth(now).toISOString();
     const { data, error } = await (supabase as any)
@@ -22,7 +22,7 @@ export function useActivityCounts(userId?: string) {
       .select('created_at')
       .eq('user_id', uid)
       .gte('created_at', fromMonth);
-    if (error || !data) return;
+    if (error || !data) throw error ?? new Error('Activity counts unavailable');
     const today = startOfDay(now).getTime();
     const week = startOfWeek(now).getTime();
     let t=0,w=0,m=0;
@@ -32,13 +32,15 @@ export function useActivityCounts(userId?: string) {
       if (ts >= week) w++;
       if (ts >= today) t++;
     }
-    setCounts({ today: t, week: w, month: m });
+    return { today: t, week: w, month: m };
   }, [uid]);
 
-  useEffect(() => { load(); }, [load]);
+  const scope = `counts:${uid}:${startOfDay().toISOString()}`;
+  const snapshot = useActivitySnapshot<Counts>(user?.id, scope, { today: 0, week: 0, month: 0 }, load);
+  const { data: counts, setData: setCounts } = snapshot;
 
   useEffect(() => {
-    if (!uid) return;
+    if (!uid || snapshot.offline) return;
     const ch = (supabase as any)
       .channel(`activity-counts-${uid}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_log' }, (payload: any) => {
@@ -57,7 +59,7 @@ export function useActivityCounts(userId?: string) {
       })
       .subscribe();
     return () => { (supabase as any).removeChannel(ch); };
-  }, [uid]);
+  }, [uid, snapshot.offline, setCounts]);
 
-  return { counts, refetch: load };
+  return { counts, refetch: snapshot.refetch, banner: snapshot.banner, cacheMissing: snapshot.cacheMissing };
 }
