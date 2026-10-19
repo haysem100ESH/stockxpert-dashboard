@@ -49,9 +49,16 @@ export function useOfflineSync() {
           for (const record of attention) {
             const { data, error } = await supabase.from('pos_sync_issues').select('*').eq('id', record.issueId).maybeSingle();
             if (error || !data) continue;
-            if (data.status === 'voided' || ((data.status === 'synced' || data.status === 'resolved') && data.sale_id)) {
-              await settleSale(record, { status: data.status === 'voided' ? 'voided' : 'synced', sale_id: data.sale_id,
-                issue_id: record.issueId, duplicate: true, reason_code: data.reason_code, reason_detail: data.reason_detail });
+            if (data.status === 'voided' || data.status === 'synced' || data.status === 'resolved') {
+              let resolution: RpcResult = { status: 'voided', issue_id: record.issueId, reason_code: data.reason_code };
+              if (data.status !== 'voided') {
+                // Do not assume an issue-table sale-ID column. The original ID
+                // safely reads back an already reconciled sale through the RPC.
+                const reply = await callPos(record.payload, record.mode);
+                if (reply.error || reply.data?.status !== 'synced') continue;
+                resolution = { ...reply.data, duplicate: true } as RpcResult;
+              }
+              await settleSale(record, resolution);
               try {
                 const rows = await fetchCatalog([record.branchId], userId);
                 await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([record.branchId], userId, rows));
