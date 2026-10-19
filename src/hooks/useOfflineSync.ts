@@ -47,7 +47,7 @@ export function useOfflineSync() {
           // Read its authoritative outcome to release the reservation when resolved.
           const attention = await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'needs_attention' && !!r.issueId).toArray();
           for (const record of attention) {
-            const { data, error } = await supabase.from('pos_sync_issues').select('status,sale_id,reason_code,reason_detail').eq('id', record.issueId).maybeSingle();
+            const { data, error } = await supabase.from('pos_sync_issues').select('*').eq('id', record.issueId).maybeSingle();
             if (error || !data) continue;
             if (data.status === 'voided' || ((data.status === 'synced' || data.status === 'resolved') && data.sale_id)) {
               await settleSale(record, { status: data.status === 'voided' ? 'voided' : 'synced', sale_id: data.sale_id,

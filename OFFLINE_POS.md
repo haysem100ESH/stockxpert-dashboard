@@ -84,3 +84,16 @@ bun test src/lib/offline/reconciliation.test.ts
 ```
 
 Tests cover stock/credit rules, durable queue, original-ID retries, duplicate settlement, export filtering, export-gated isolated cleanup and reconciliation action rules. Browser fixtures verify UI flows with simulated cached identities/server responses; they do not prove live authorization or real server checkout. A real original-app session is unavailable here, and the app is not published: authenticated server acceptance and published offline startup remain manual checks.
+
+Part 2 simulated browser checks verified a real local checkout/export with its original payload, disabled sign-out before export, enabled sign-out after export, and cleared sales/catalog/meta on completed offline sign-out. Mocked owner flows verified price acceptance, required-note voiding, refreshed read-only history, and no phone-width overflow or page errors.
+
+## Part 2 files created / changed
+
+- `AGENTS.md`, `roadmap.md`, `OFFLINE_POS.md`
+- `src/App.tsx`
+- `src/components/AppSidebar.tsx`, `src/components/Layout.tsx`
+- `src/components/sales/OfflineStatusBadge.tsx`, `SalesManagement.tsx`, `PendingSalesSheet.tsx`, `DeviceSignOutDialog.tsx`
+- `src/pages/SyncIssuesPage.tsx`
+- `src/hooks/useAuth.tsx`, `useOfflineSync.ts`, `useSyncIssues.ts`
+- `src/lib/offline/types.ts`, `cachedSession.ts`, `deviceSafety.ts`, `reconciliation.ts`, `deviceSafety.test.ts`, `reconciliation.test.ts`
+- Project memory: `mem://features/offline-pos`
