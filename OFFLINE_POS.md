@@ -20,7 +20,7 @@ Dexie uses IndexedDB database `pharmaxpert-offline`:
 
 Metadata is namespaced by user (for example `profile:<userId>` and `catalogSync:<userId>:<branchId>`). Catalog rows are filtered by user and branch; sales are filtered by user. No passwords or new auth tokens are stored in Dexie. Offline identity reads the existing auth SDK session; exports do not include that session or metadata.
 
-Displayed availability is serverAvailable minus base quantities reserved by the current cashier's pending, syncing and needs_attention local sales. Other cashiers' records do not reserve this cashier's stock. serverAvailable sums remaining quantities in non-expired batches; items with no batch rows use branch quantity. Synced and voided records do not reserve stock. Confirmed records are kept for 30 days. Unresolved records are never deleted automatically. Normal sign-out preserves all sales (any status), cached catalog, access metadata, sync times, device ID and backup folder connection; no export is required.
+Displayed availability is serverAvailable minus base quantities reserved by ALL cashiers' pending, syncing and needs_attention local sales on this PC for the same branch/item, even after sign-out. serverAvailable sums remaining quantities in non-expired batches; items with no batch rows use branch quantity. Discarded, synced and voided records do not reserve stock. Settlement moves confirmed quantities into the catalog snapshot; subsequent server catalog replacement does not reserve synced records again. Confirmed records are kept for 30 days. Unresolved records are never deleted automatically. Normal sign-out preserves all sales (any status), cached catalog, access metadata, sync times, device ID and backup folder connection; no export is required.
 
 Dexie version 2 retains the same tables, keys and indexes and adds optional discard note/actor/time fields. Device-only refusals (needs_attention with no issueId) allow unchanged Retry or required-note Discard. Discarded records release stock, remain visible in history, are included in exports and block explicit retirement cleanup until exported. They are never deleted automatically. Server-owned issues cannot be discarded locally.
 
@@ -30,7 +30,7 @@ Normal sign-out, online or offline, clears the authentication session and displa
 
 When the same cashier signs in, interrupted `syncing` records reset to `pending` and resume normal automatic sync with their original IDs and payloads. Their saved catalog remains available until refreshed. Device-only refusals require Retry/review and discarded records remain history; these are not automatically sent.
 
-If another cashier signs in, Sales shows only the count of other cashiers' unresolved records. No names, amounts or items are exposed. Those records never appear in the signed-in cashier's device list, exports, backup, totals or stock reservations, and sync only when their original cashier signs in.
+If another cashier signs in, Sales shows only the count of other cashiers' unresolved records. No names, amounts or items are exposed. Those records never appear in the signed-in cashier's device list, exports, backup or totals, and sync only when their original cashier signs in. Their pending, syncing and needs_attention sales still reserve the shared physical stock for the same branch/item on this PC.
 
 ## Storage protection
 
@@ -111,7 +111,7 @@ Queued retries derive mode from the original payload: fully paid sales without d
 - [ ] Exercise PRICE_CHANGED accept-price retry, required-note Void, and read-only history; verify final cashier status.
 - [ ] Sign out online/offline without export; verify all sales, catalog/meta and backup connection stay. Offline sign-out warns that internet is required to sign in again.
 - [ ] Sign in again as the same cashier; verify interrupted syncing records resume and cached catalog is reused. Without a session, offline startup remains denied.
-- [ ] Sign in as another cashier; verify only the other-cashier count is visible and their records do not affect list/export/backup/totals/stock.
+- [ ] Sign in as another cashier; verify only the other-cashier count is visible, their records do not affect list/export/backup/totals, and same-branch pending/syncing/needs_attention sales still reserve shared stock.
 - [ ] Export all unresolved statuses; inspect payloads and absence of credentials. Explicit **Remove my data from this PC** is blocked until current export, invalidates stale export, and removes only your own data after confirmation.
 - [ ] Recover on the original device/login; for a replacement device follow the export/support recovery procedure above.
 - [ ] Exercise blocked/private storage and cleared-site-data behavior without using real unexported sales.
