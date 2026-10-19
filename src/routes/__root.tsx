@@ -9,11 +9,20 @@ import {
   type ErrorComponentProps,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { ClientOnly } from "@tanstack/react-router";
+import { ThemeProvider } from "next-themes";
+import { Toaster } from "@/components/ui/toaster";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider } from "@/hooks/useAuth";
+import { AdvancedModeProvider } from "@/hooks/useAdvancedMode";
+import { StaffPermissionsProvider } from "@/hooks/useStaffPermissions";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
 function NotFoundComponent() {
+  // eslint-disable-next-line no-constant-condition
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
@@ -78,21 +87,19 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "StockXpert" },
+      { name: "description", content: "StockXpert — inventory, sales and staff management for pharmacies and shops." },
+      { property: "og:title", content: "StockXpert" },
+      { property: "og:description", content: "StockXpert — inventory, sales and staff management for pharmacies and shops." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
-    ],
+          ],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
     ],
   }),
   shellComponent: RootShell,
@@ -120,8 +127,23 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      {/* The app keeps sign-in state in the browser, so it renders client-side only. */}
+      <ClientOnly fallback={<div className="min-h-screen bg-background" />}>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
+          <AdvancedModeProvider>
+            <AuthProvider>
+              <StaffPermissionsProvider>
+                <TooltipProvider>
+                  <Toaster />
+                  <Sonner />
+                  {/* Required: nested routes render here. */}
+                  <Outlet />
+                </TooltipProvider>
+              </StaffPermissionsProvider>
+            </AuthProvider>
+          </AdvancedModeProvider>
+        </ThemeProvider>
+      </ClientOnly>
     </QueryClientProvider>
   );
 }
