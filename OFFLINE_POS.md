@@ -22,11 +22,15 @@ Metadata is namespaced by user (for example `profile:<userId>` and `catalogSync:
 
 Displayed availability is serverAvailable minus base quantities reserved by pending, syncing and needs_attention local sales. serverAvailable sums remaining quantities in non-expired batches; items with no batch rows use branch quantity. Synced and voided records do not reserve stock. Confirmed records are kept for 30 days. Unresolved records are never deleted automatically; explicit exported sign-out removes them along with the departing user's catalog, metadata and local history. Never sign out to fix a queue without exporting first.
 
+Dexie version 2 retains the same tables, keys and indexes and adds optional discard note/actor/time fields. Device-only refusals (needs_attention with no issueId) allow unchanged Retry or required-note Discard. Discarded records release stock, remain visible in history, are included in exports and block sign-out cleanup until exported. They are never deleted automatically. Server-owned issues cannot be discarded locally.
+
 ## Existing server contract
 
 `process_pos_sale(p_payload, p_mode)` owns sale processing in an atomic transaction: sales, sale_items, FIFO deduction of non-expired batches, sale_item_batches, branch quantity synchronization, and online customer credit. Unique `sales.client_txn_id` provides idempotency: repeating the same original payload/ID never creates a second sale. The server checks current permission/branch, quantity, totals, stock, expiry, price and packaging. Any live batch's selling price is accepted. Offline credit is refused.
 
 Success returns synced (duplicate is also success); online validation returns rejected with no local save; offline conflicts are stored in `pos_sync_issues` and return needs_attention. Network/auth/timeouts/unknown errors keep the original sale queued for safe retry. Unknown online credit results stay in online mode; do not re-enter them.
+
+Queued retries derive mode from the original payload: fully paid sales without debt deduction use offline, including legacy records stored as online; credit uses online. Branch/user authorization refusals return rejected in both modes without an issue row. Background rejection retains a device-only needs_attention record and its reservation. SQLSTATE classes 22/23, 42501, and 28000 with a valid session stop automatic retry and retain the exact server error for device review. Missing codes, network/abort/timeouts, PGRST codes, 40001, 40P01, 57014 and HTTP 5xx without SQLSTATE retain backoff. Unknown checkout errors are always persisted before returning, even when permanent.
 
 `reconcile_pos_sync_issue(p_issue_id, p_action, p_note)` is the server-authorized owner reconciliation endpoint. Actions are retry, accept_price_retry (price conflicts only) and void (required note). It returns synced, needs_attention or voided. Existing RLS limits issue visibility to the owner's branches. The frontend owner gate is only presentation; no new permissions or policies are installed.
 
