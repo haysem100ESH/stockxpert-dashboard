@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useStaffGoals, type StaffGoal } from '@/hooks/useStaffGoals';
@@ -11,7 +11,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
-import { useCallback } from 'react';
 import { useActivitySnapshot } from '@/hooks/useActivitySnapshot';
 
 interface StaffOption { id: string; full_name: string | null; branch_id: string | null }

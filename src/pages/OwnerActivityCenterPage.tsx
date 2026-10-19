@@ -92,7 +92,11 @@ export default function OwnerActivityCenterPage() {
   const [selected, setSelected] = useState<StaffPick | null>(null);
   const [selectedRange, setSelectedRange] = useState<LeaderboardRange | null>(null);
   const { reachable } = useOfflineStatus();
-  const [pendingRange, setPendingRange] = useState<LeaderboardRange>({ label: 'Today' });
+  const [pendingRange, setPendingRange] = useState<LeaderboardRange>(() => {
+    const from = new Date(); from.setHours(0, 0, 0, 0);
+    const to = new Date(from); to.setDate(to.getDate() + 1);
+    return { label: 'Today', from, to };
+  });
   const onRangeChange = useCallback((range: LeaderboardRange) => setPendingRange(range), []);
   const pending = usePendingActivities([], pendingRange);
 
