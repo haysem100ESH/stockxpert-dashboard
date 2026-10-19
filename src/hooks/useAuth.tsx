@@ -3,7 +3,7 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/db';
 import { cacheMeta, readMeta } from '@/lib/offline/db';
 import type { CachedProfile } from '@/lib/offline/types';
-import { readPersistedSession } from '@/lib/offline/cachedSession';
+import { readPersistedSession, clearPersistedSession } from '@/lib/offline/cachedSession';
 import { getOfflineState } from '@/lib/offline/store';
 import { setOfflineState } from '@/lib/offline/store';
 import { clearUserDeviceData } from '@/lib/offline/deviceSafety';
@@ -191,6 +191,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     await withPosLock(async () => {
       await clearUserDeviceData(user.id, exported);
+      localStorage.removeItem('selectedBranchId');
+      if (!getOfflineState().reachable) {
+        clearPersistedSession();
+        queryClient.clear();
+        setUser(null); setSession(null); setProfile(null);
+        // Discard the SDK's in-memory credentials too, without a network call.
+        window.location.assign('/auth');
+        return;
+      }
       const { error } = await supabase.auth.signOut({ scope: 'local' });
       if (error) throw error;
       queryClient.clear();
