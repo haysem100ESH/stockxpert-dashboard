@@ -22,3 +22,4 @@
 - [x] Document changed files and verification limitations
 - [ ] Real authenticated server checkout and reconnect sync — blocked by unavailable original-app test session
 - [ ] Published offline app-shell verification — requires publishing; development intentionally does not register a worker
+- [x] Storage protection, automatic backup folder, restore from backup (frontend only)

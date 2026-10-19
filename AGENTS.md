@@ -9,4 +9,4 @@
 - Export POS records through an explicit field allowlist; sign-out cleanup must recheck export coverage under the POS lock before deleting only the departing user's records.
 - Keep reconciliation online-only and rely on existing server RLS/RPC authorization; client owner checks only gate presentation, never grant privileges.
 - Derive queued retry mode from the unchanged payload and keep RPC error classification in the offline sync module; this covers legacy records and makes permanent failures testable independently of React.
-- Keep device-only discard audit fields in the versioned Dexie sale record and export gate; this preserves recovery history without reserving stock.
+- Keep device-only discard audit fields in the versioned Dexie sale record and export gate; this preserves recovery history without reserving stock.- Keep storage-persistence checks and the File System Access backup in `src/lib/offline/storageGuard.ts`/`backup.ts`; backup is best-effort and must never throw into checkout or sync, and restore only accepts files whose userId matches the signed-in user to preserve seller attribution.
