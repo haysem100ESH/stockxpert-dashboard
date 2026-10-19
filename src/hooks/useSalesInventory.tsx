@@ -15,7 +15,14 @@
  * - ['sales-inventory', { ownerId, selectedBranch, staffBranchId }]
  * - ['sales-customers', { ownerId, selectedBranch }]
  */
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { liveQuery } from 'dexie';
+import { offlineDb, readMeta } from '@/lib/offline/db';
+import { fetchCatalog, replaceCatalog } from '@/lib/offline/catalog';
+import { availableStock } from '@/lib/offline/rules';
+import { checkReachability, withPosLock } from '@/lib/offline/network';
+import { useOfflineStatus } from '@/lib/offline/store';
+import type { CatalogItem } from '@/lib/offline/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/db';
 import { useAuth } from './useAuth';
@@ -60,115 +67,6 @@ import { chunkedInPartial } from '@/lib/supabaseBatch';
 
 // Visible string shown when a name lookup genuinely fails after retries.
 export const SALES_UNAVAILABLE = 'Unavailable';
-
-async function fetchSalesInventory(branchIds: string[]): Promise<SalesMedicine[]> {
-  if (branchIds.length === 0) return [];
-
-  const { data: items, error } = await (supabase as any)
-    .from('branch_items')
-    .select('id, medicine_id, branch_id, selling_price, purchase_price, quantity, expiry_date')
-    .in('branch_id', branchIds)
-    .gt('quantity', 0)
-    .order('created_at', { ascending: false });
-  if (error) throw error;
-  if (!items || items.length === 0) return [];
-
-  const medicineIds = [...new Set(items.map((i: any) => i.medicine_id))] as string[];
-  const allBranchIds = [...new Set(items.map((i: any) => i.branch_id).filter(Boolean))] as string[];
-  const branchItemIds = items.map((i: any) => i.id) as string[];
-  const today = new Date().toISOString().split('T')[0];
-
-  // Chunk to 50 ids + retry. Single-shot .in() with hundreds of UUIDs
-  // could be silently dropped by proxies on slow connections, causing
-  // names to render as "Unknown".
-  const [medsRes, branchesRes, batchesRes] = await Promise.all([
-    chunkedInPartial<any>(medicineIds, (ids) =>
-      (supabase as any)
-        .from('medicines')
-        .select('id, name, generic_name, category, item_type, unit_label, units_per_pack, medicine_group, strength, packaging_mode, main_unit_name, unit_price')
-        .in('id', ids)
-    , 20),
-    chunkedInPartial<any>(allBranchIds, (ids) =>
-      (supabase as any).from('pharmacy_branches').select('id, name').in('id', ids)
-    ),
-    chunkedInPartial<any>(branchItemIds, (ids) =>
-      (supabase as any)
-        .from('inventory_batches')
-        .select('branch_item_id, remaining_quantity, expiry_date, selling_price, purchase_price, created_at')
-        .in('branch_item_id', ids)
-        .gt('remaining_quantity', 0)
-    , 20),
-  ]);
-
-  const medMap: Record<string, any> = {};
-  medsRes.data.forEach((m: any) => { medMap[m.id] = m; });
-  const branchMap: Record<string, string> = {};
-  branchesRes.data.forEach((b: any) => { branchMap[b.id] = b.name; });
-
-  // Track expired-batch quantity per branch_item so we exclude it from the
-  // sellable stock figure, and identify the FIFO-front fresh batch so the
-  // sales card surfaces its expiry/price instead of the expired one's.
-  const expiredQtyByItem: Record<string, number> = {};
-  const hasAnyBatch: Record<string, boolean> = {};
-  const frontBatchByItem: Record<string, any> = {};
-  batchesRes.data.forEach((b: any) => {
-    hasAnyBatch[b.branch_item_id] = true;
-    if (b.expiry_date && b.expiry_date < today) {
-      expiredQtyByItem[b.branch_item_id] = (expiredQtyByItem[b.branch_item_id] || 0) + Number(b.remaining_quantity || 0);
-    } else {
-      const current = frontBatchByItem[b.branch_item_id];
-      const isEarlier = !current
-        || (b.expiry_date && (!current.expiry_date || b.expiry_date < current.expiry_date))
-        || (b.expiry_date === current.expiry_date && b.created_at < current.created_at);
-      if (isEarlier) frontBatchByItem[b.branch_item_id] = b;
-    }
-  });
-
-  return items
-    .map((item: any) => {
-      const med = medMap[item.medicine_id];
-      const m = med || {};
-      const hasMed = !!med;
-      const rawQty = Number(item.quantity) || 0;
-      const expiredQty = expiredQtyByItem[item.id] || 0;
-      let sellable = Math.max(0, rawQty - expiredQty);
-
-      // Legacy items without batches: fall back to branch_items.expiry_date.
-      if (!hasAnyBatch[item.id] && item.expiry_date && item.expiry_date < today) {
-        sellable = 0;
-      }
-
-      // Surface the FIFO-front fresh batch's expiry & price on the card.
-      const front = frontBatchByItem[item.id];
-      const displayExpiry = front ? front.expiry_date : item.expiry_date;
-      const displaySellingPrice = front && front.selling_price != null ? Number(front.selling_price) : item.selling_price;
-      const displayPurchasePrice = front && front.purchase_price != null ? Number(front.purchase_price) : item.purchase_price;
-
-      return {
-        id: item.id,
-        medicine_id: item.medicine_id,
-        name: hasMed ? m.name : SALES_UNAVAILABLE,
-        generic_name: m.generic_name,
-        selling_price: displaySellingPrice,
-        purchase_price: displayPurchasePrice,
-        stock_quantity: sellable,
-        category: m.category,
-        expiry_date: displayExpiry,
-        units_per_pack: m.units_per_pack,
-        open_pack_units: 0,
-        unit_label: m.unit_label,
-        item_type: m.item_type,
-        branch_id: item.branch_id,
-        branch_name: branchMap[item.branch_id],
-        medicine_group: m.medicine_group,
-        strength: m.strength,
-        packaging_mode: m.packaging_mode,
-        main_unit_name: m.main_unit_name,
-        unit_price: m.unit_price,
-      } as SalesMedicine;
-    })
-    .filter((m: SalesMedicine) => m.stock_quantity > 0);
-}
 
 async function fetchSalesCustomers(selectedBranch: string | null, ownerBranchIds: string[], isOwner: boolean): Promise<SalesCustomer[]> {
   if (!selectedBranch && isOwner && ownerBranchIds.length === 0) return [];
@@ -221,12 +119,18 @@ export function useSalesInventory() {
   const { selectedBranch } = useBranchContext();
   const { branchIds: cachedOwnerBranchIds, isLoading: ownerBranchesLoading } = useOwnerBranchIds();
   const queryClient = useQueryClient();
+  const { reachable } = useOfflineStatus();
+  const [localRows, setLocalRows] = useState<CatalogItem[]>([]);
+  const [reservations, setReservations] = useState<import('@/lib/offline/types').LocalSale[]>([]);
+  const [localLoading, setLocalLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState('');
+  const [cachedAt, setCachedAt] = useState<string | undefined>();
 
   const isOwner = profile?.role === 'owner';
 
   // Resolve branch scope
   const branchIds = useMemo(() => {
-    if (selectedBranch) return [selectedBranch];
+    if (selectedBranch) return isOwner ? cachedOwnerBranchIds.filter(id => id === selectedBranch) : profile?.branch_id === selectedBranch ? [selectedBranch] : [];
     if (isOwner) return cachedOwnerBranchIds;
     if (profile?.branch_id) return [profile.branch_id];
     return [];
@@ -251,19 +155,50 @@ export function useSalesInventory() {
     [isOwner, profile?.id, selectedBranch]
   );
 
-  const inventoryQuery = useQuery({
-    queryKey: inventoryKey,
-    queryFn: () => fetchSalesInventory(branchIds),
-    enabled,
-    staleTime: 60 * 1000,
-    gcTime: 5 * 60 * 1000,
-    placeholderData: (prev) => prev,
-  });
+  const scopeKey = branchIds.join(',');
+  useEffect(() => {
+    setLocalLoading(true);
+    setLocalRows([]);
+    if (!profile || !branchIds.length) { setLocalLoading(false); return; }
+    const sub = liveQuery(async () => ({
+      rows: await offlineDb.catalog.where('ownerKey').equals(profile.id).and(row => branchIds.includes(row.branchId)).toArray(),
+      sales: await offlineDb.sales.where('branchId').anyOf(branchIds).toArray(),
+      times: await Promise.all(branchIds.map(id => readMeta<string>(`catalogSync:${profile.id}:${id}`))),
+    })).subscribe({ next: ({ rows, sales, times }) => {
+      setLocalRows(rows); setReservations(sales); setLocalLoading(false);
+      setCachedAt(times.filter((time): time is string => !!time).sort()[0]);
+    }, error: () => { setLocalLoading(false); setCatalogError('Local storage is unavailable. Offline Sales cannot open on this device.'); } });
+    return () => sub.unsubscribe();
+  }, [profile?.id, scopeKey]);
+
+  const refresh = useCallback(async () => {
+    if (!profile || !branchIds.length || !await checkReachability()) return;
+    try {
+      await withPosLock(async () => {
+        const rows = await fetchCatalog(branchIds, profile.id);
+        await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog(branchIds, profile.id, rows));
+      });
+      setCatalogError('');
+    } catch (error) { setCatalogError(error instanceof Error ? error.message : 'Could not refresh prices and stock. The last saved catalog is shown.'); }
+  }, [profile?.id, scopeKey]);
+  useEffect(() => {
+    if (!enabled || !reachable) return;
+    void refresh();
+    const interval = setInterval(() => { void refresh(); }, 10 * 60 * 1000);
+    const handler = () => { void refresh(); };
+    window.addEventListener('app:refresh', handler);
+    return () => { clearInterval(interval); window.removeEventListener('app:refresh', handler); };
+  }, [enabled, reachable, refresh]);
+  const medicines = useMemo(() => localRows.map(row => ({ ...row,
+    stock_quantity: availableStock(row.serverAvailable, row.id, reservations),
+  })).filter(row => row.stock_quantity > 0), [localRows, reservations]);
+  const packagingMap = useMemo(() => Object.fromEntries(localRows.filter(row => row.packaging)
+    .map(row => [row.medicine_id, row.packaging])) as Record<string, import('@/lib/packaging').Packaging>, [localRows]);
 
   const customersQuery = useQuery({
     queryKey: customersKey,
     queryFn: () => fetchSalesCustomers(selectedBranch, cachedOwnerBranchIds, isOwner),
-    enabled,
+    enabled: enabled && reachable,
     staleTime: 60 * 1000,
     gcTime: 5 * 60 * 1000,
     placeholderData: (prev) => prev,
@@ -273,19 +208,19 @@ export function useSalesInventory() {
   // list updates immediately rather than waiting for the next focus event.
   useEffect(() => {
     const handler = () => {
-      queryClient.refetchQueries({ queryKey: ['sales-inventory'] });
+      void refresh();
       queryClient.refetchQueries({ queryKey: ['sales-customers'] });
       queryClient.refetchQueries({ queryKey: ['branch-inventory'] });
     };
     window.addEventListener('app:refresh', handler);
     return () => window.removeEventListener('app:refresh', handler);
-  }, [queryClient]);
+  }, [queryClient, refresh, reachable]);
 
   // Realtime: refetch when branch_items / inventory_batches change for our scope.
   useEffect(() => {
-    if (!enabled || branchIds.length === 0) return;
+    if (!enabled || !reachable || branchIds.length === 0) return;
     const invalidate = () => {
-      queryClient.refetchQueries({ queryKey: ['sales-inventory'] });
+      void refresh();
       queryClient.refetchQueries({ queryKey: ['branch-inventory'] });
     };
     const channel = (supabase as any)
@@ -295,17 +230,17 @@ export function useSalesInventory() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, invalidate)
       .subscribe();
     return () => { (supabase as any).removeChannel(channel); };
-  }, [enabled, branchIds.join(','), queryClient]);
+  }, [enabled, reachable, scopeKey, queryClient, refresh]);
 
   return {
-    medicines: inventoryQuery.data ?? [],
-    customers: customersQuery.data ?? [],
-    loading: inventoryQuery.isLoading || customersQuery.isLoading,
-    isFetching: inventoryQuery.isFetching || customersQuery.isFetching,
-    refetchMedicines: inventoryQuery.refetch,
+    medicines, packagingMap, cachedAt, catalogError,
+    customers: reachable ? customersQuery.data ?? [] : [],
+    loading: localLoading || (reachable && !cachedAt && ownerBranchesLoading),
+    isFetching: customersQuery.isFetching,
+    refetchMedicines: refresh,
     refetchCustomers: customersQuery.refetch,
     invalidate: () => {
-      queryClient.refetchQueries({ queryKey: ['sales-inventory'] });
+      void refresh();
       queryClient.refetchQueries({ queryKey: ['sales-customers'] });
     },
   };
