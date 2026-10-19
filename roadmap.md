@@ -1,5 +1,10 @@
 # Offline POS — part 1
 
+## Shared-stock reservation fix
+- [ ] Reserve stock across all cashiers on this PC within the same branch
+- [ ] Test status/branch isolation, catalog refresh without double counting, and unchanged private records
+- [ ] Run full Bun suite; no browser/device verification
+
 ## Sign-out retention
 - [x] Preserve all device data on normal sign-out; clear authentication only
 - [x] Update sign-out dialog and add separate export-gated retirement action
