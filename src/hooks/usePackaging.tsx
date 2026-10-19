@@ -14,10 +14,15 @@ import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/db';
 import { Packaging, defaultPackaging } from '@/lib/packaging';
+import { offlineDb } from '@/lib/offline/db';
+import { useOfflineStatus } from '@/lib/offline/store';
+import { useAuth } from './useAuth';
 
 function usePackagingInvalidation() {
   const queryClient = useQueryClient();
+  const { reachable } = useOfflineStatus();
   useEffect(() => {
+    if (!reachable) return;
     const invalidate = () => {
       queryClient.invalidateQueries({ queryKey: ['medicine_packaging'] });
       queryClient.invalidateQueries({ queryKey: ['medicine_packaging_map'] });
@@ -31,15 +36,23 @@ function usePackagingInvalidation() {
       window.removeEventListener('app:refresh', invalidate);
       (supabase as any).removeChannel(channel);
     };
-  }, [queryClient]);
+  }, [queryClient, reachable]);
 }
 
 export function usePackaging(medicineId?: string | null) {
   usePackagingInvalidation();
+  const { reachable } = useOfflineStatus();
+  const { user } = useAuth();
   const q = useQuery({
-    queryKey: ['medicine_packaging', medicineId],
+    queryKey: ['medicine_packaging', medicineId, reachable, user?.id],
+    networkMode: 'always',
     queryFn: async (): Promise<Packaging | null> => {
       if (!medicineId) return null;
+      if (!reachable) {
+        if (!user) return null;
+        const row = await offlineDb.catalog.where('ownerKey').equals(user.id).and(item => item.medicine_id === medicineId).first();
+        return row?.packaging ?? null;
+      }
       const { data } = await (supabase as any)
         .from('medicine_packaging')
         .select('*')
@@ -55,6 +68,7 @@ export function usePackaging(medicineId?: string | null) {
 
 export function usePackagingMap(medicineIds: string[]) {
   usePackagingInvalidation();
+  const { reachable } = useOfflineStatus();
   const ids = [...new Set(medicineIds || [])].filter(Boolean).sort();
   const key = ids.join(',');
   return useQuery({
@@ -76,7 +90,7 @@ export function usePackagingMap(medicineIds: string[]) {
       data.forEach((row: any) => { map[row.medicine_id] = row as Packaging; });
       return map;
     },
-    enabled: ids.length > 0,
+    enabled: ids.length > 0 && reachable,
     staleTime: 60_000,
   });
 }

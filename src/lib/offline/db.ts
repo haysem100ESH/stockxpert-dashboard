@@ -2,9 +2,9 @@ import Dexie, { type Table } from 'dexie';
 import type { CatalogItem, LocalSale } from './types';
 
 export class OfflineDatabase extends Dexie {
-  catalog!: Table<CatalogItem, string>;
-  sales!: Table<LocalSale, string>;
-  meta!: Table<{ key: string; value: unknown }, string>;
+  declare catalog: Table<CatalogItem, string>;
+  declare sales: Table<LocalSale, string>;
+  declare meta: Table<{ key: string; value: unknown }, string>;
   constructor(name = 'pharmaxpert-offline') {
     super(name);
     this.version(1).stores({

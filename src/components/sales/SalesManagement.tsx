@@ -766,13 +766,13 @@ export default function SalesManagement() {
                 <span>{unitName} price:</span>
                 <span className="font-medium">ETB {Number(unitPrice || 0).toFixed(2)}</span>
               </div>
-              {pkg!.strip_enabled && (
+              {pkg?.strip_enabled && (
                 <div className="flex justify-between text-sm text-muted-foreground">
                   <span>{stripName} price:</span>
                   <span>ETB {Number(stripPrice || 0).toFixed(2)}</span>
                 </div>
               )}
-              {pkg!.pack_enabled && (
+              {pkg?.pack_enabled && (
                 <div className="flex justify-between text-sm text-muted-foreground">
                   <span>{packName} price:</span>
                   <span>ETB {Number(packPrice || 0).toFixed(2)}</span>
@@ -781,7 +781,7 @@ export default function SalesManagement() {
               <div className="flex justify-between text-sm">
                 <span>Stock:</span>
                 <Badge variant={medicine.stock_quantity <= 10 ? 'destructive' : 'secondary'}>
-                  {formatStock(medicine.stock_quantity, pkg!)}
+                  {pkg && formatStock(medicine.stock_quantity, pkg)}
                 </Badge>
               </div>
               <div className="flex justify-between text-xs text-muted-foreground">
