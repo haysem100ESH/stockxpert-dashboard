@@ -23,6 +23,10 @@ export interface DirHandleLike {
 
 export const backupSupported = () => typeof window !== 'undefined' && typeof (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker === 'function';
 export const backupDirKey = (userId: string) => `backupDir:${userId}`;
+// Live handles are kept in memory too; Dexie keeps the structured clone across restarts.
+const liveDirs = new Map<string, DirHandleLike>();
+export async function rememberBackupDir(userId: string, dir: DirHandleLike) { liveDirs.set(userId, dir); await writeMeta(backupDirKey(userId), dir); }
+export async function readBackupDir(userId: string) { return liveDirs.get(userId) ?? await readMeta<DirHandleLike>(backupDirKey(userId)); }
 
 export function buildBackupDocument(records: LocalSale[], userId: string, deviceId: string, now = new Date()): BackupDocument {
   const cutoff = new Date(now.getTime() - SYNCED_RETENTION_MS).toISOString();
@@ -64,7 +68,7 @@ const setBackup = (backup: BackupStatus) => setOfflineState({ backup });
 /** Writes one backup. Never throws: failures only update the indicator. */
 export async function runBackup(userId: string): Promise<BackupStatus> {
   try {
-    const dir = await readMeta<DirHandleLike>(backupDirKey(userId));
+    const dir = await readBackupDir(userId);
     if (!dir) { setBackup({ state: 'not_set_up' }); return getOfflineState().backup; }
     const permission = dir.queryPermission ? await dir.queryPermission({ mode: 'readwrite' }) : 'granted';
     if (permission === 'prompt') { setBackup({ state: 'paused' }); return getOfflineState().backup; }
@@ -78,7 +82,7 @@ export async function runBackup(userId: string): Promise<BackupStatus> {
 }
 export async function resumeBackup(userId: string) {
   try {
-    const dir = await readMeta<DirHandleLike>(backupDirKey(userId));
+    const dir = await readBackupDir(userId);
     if (dir?.requestPermission) await dir.requestPermission({ mode: 'readwrite' });
   } catch (e) { setBackup({ state: 'failing', reason: reasonOf(e) }); return; }
   await runBackup(userId);
@@ -86,7 +90,7 @@ export async function resumeBackup(userId: string) {
 export async function setUpBackup(userId: string) {
   const picker = (window as unknown as { showDirectoryPicker: (o: object) => Promise<DirHandleLike> }).showDirectoryPicker;
   const dir = await picker({ id: 'pharmaxpert-backup', mode: 'readwrite', startIn: 'documents' });
-  await writeMeta(backupDirKey(userId), dir);
+  await rememberBackupDir(userId, dir);
   await getDeviceId();
   return runBackup(userId);
 }

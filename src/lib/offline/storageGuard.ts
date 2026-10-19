@@ -11,7 +11,7 @@ export const NOT_PROTECTED_WARNING = 'This browser has not protected your offlin
 export const isPrivateLike = (persisted: boolean | 'unsupported', quota?: number) =>
   persisted === false && typeof quota === 'number' && quota < PRIVATE_QUOTA_BYTES;
 
-export async function probeStorage(storage: StorageLike | undefined = typeof navigator !== 'undefined' ? (navigator as Navigator & { storage?: StorageLike }).storage : undefined): Promise<StorageInfo> {
+export async function probeStorage(storage: StorageLike | undefined): Promise<StorageInfo> {
   let persisted: boolean | 'unsupported' = 'unsupported';
   try {
     if (storage?.persisted) {

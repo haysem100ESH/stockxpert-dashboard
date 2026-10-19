@@ -13,7 +13,7 @@ test('not persisted requests persist() and uses its answer', async () => {
   expect(asked).toBe(1); expect(info.persisted).toBe(true); expect(info.privateLike).toBe(false);
 });
 test('missing storage API is unsupported, not private', async () => {
-  expect(await probeStorage(undefined)).toEqual({ persisted: 'unsupported', quota: undefined, usage: undefined, privateLike: false });
+  expect(await probeStorage(undefined as never)).toEqual({ persisted: 'unsupported', quota: undefined, usage: undefined, privateLike: false });
 });
 test('privateLike heuristic: refused persistence and quota below 300 MB', () => {
   expect(isPrivateLike(false, 299 * MB)).toBe(true);

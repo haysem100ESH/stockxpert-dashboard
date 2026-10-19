@@ -7,7 +7,7 @@ Dexie.dependencies.indexedDB = indexedDB; Dexie.dependencies.IDBKeyRange = IDBKe
 mock.module('./network', () => ({ validSession: async () => true, checkReachability: async () => true,
   callPos: async () => ({ data: null, error: new Error('none') }),
   withPosLock: (work: () => Promise<unknown>) => new Promise((resolve, reject) => { setTimeout(() => { work().then(resolve, reject); }, 0); }) }));
-const { offlineDb, writeMeta } = await import('./db');
+const { offlineDb } = await import('./db');
 const backup = await import('./backup');
 const { EXPORT_FIELDS } = await import('./deviceSafety');
 const { parseBackup, restoreBackup, previewBackup, OTHER_CASHIER } = await import('./restore');
@@ -57,7 +57,7 @@ test('latest + dated naming (Addis date) and pruning to 7 touches only its own p
 test('runBackup never throws: write failure, paused permission, not set up', async () => {
   expect((await backup.runBackup('user')).state).toBe('not_set_up');
   const dir = new FakeDir(); dir.failWrites = true;
-  await writeMeta(backup.backupDirKey('user'), dir);
+  await backup.rememberBackupDir('user', dir);
   await offlineDb.sales.add(sale('pending'));
   expect(await backup.runBackup('user')).toEqual({ state: 'failing', reason: 'disk full' });
   expect((await offlineDb.sales.get('txn'))?.status).toBe('pending');
