@@ -56,10 +56,14 @@ test('server rejection reserves stock; discard requires note, audits, exports an
   expect(discarded?.payload).toEqual(record.payload);
   expect(availableStock(12, 'item', await offlineDb.sales.toArray())).toBe(12);
   const records = await offlineDb.sales.toArray();
+  console.log('review trace: read discarded');
   expect(exportDocument(records, 'user').sales[0].discardNote).toBe('Refused sale reviewed');
   await expect(clearUserDeviceData('user')).rejects.toThrow('Export');
+  console.log('review trace: cleanup blocked');
   await expect(clearUserDeviceData('user', oldExport)).rejects.toThrow('Export');
+  console.log('review trace: stale export blocked');
   await retryUserSales('user', 'txn');
+  console.log('review trace: retry done');
   expect((await offlineDb.sales.get('txn'))?.status).toBe('discarded');
   await clearUserDeviceData('user', exportFingerprint(records));
   expect(await offlineDb.sales.count()).toBe(0);
