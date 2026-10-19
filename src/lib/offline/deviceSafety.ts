@@ -37,12 +37,12 @@ export async function retryUserSales(userId: string, txnId?: string) {
 }
 export async function discardUserSale(userId: string, txnId: string, note: string) {
   if (!note.trim()) throw new Error('Enter a note before discarding this sale.');
-  await withPosLock(() => offlineDb.transaction('rw', offlineDb.sales, async () => {
+  await withPosLock(async () => {
     const record = await offlineDb.sales.get(txnId);
     if (!record || record.userId !== userId || record.status !== 'needs_attention' || record.issueId) throw new Error('Only a device-only refused sale can be discarded.');
     const now = new Date().toISOString();
     await offlineDb.sales.update(txnId, { status: 'discarded', discardNote: note.trim(), discardedBy: userId, discardedAt: now, updatedAt: now });
-  }));
+  });
 }
 export async function clearUserDeviceData(userId: string, exported?: string) {
   await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, async () => {
