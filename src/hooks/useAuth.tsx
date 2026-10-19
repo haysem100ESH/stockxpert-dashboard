@@ -5,6 +5,7 @@ import { cacheMeta, readMeta } from '@/lib/offline/db';
 import type { CachedProfile } from '@/lib/offline/types';
 import { readPersistedSession } from '@/lib/offline/cachedSession';
 import { signOutSession } from '@/lib/offline/signOut';
+import { forgetBackupDir } from '@/lib/offline/backup';
 import { getOfflineState } from '@/lib/offline/store';
 import { setOfflineState } from '@/lib/offline/store';
 import { clearUserDeviceData } from '@/lib/offline/deviceSafety';
@@ -209,6 +210,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     await withPosLock(async () => {
       await clearUserDeviceData(user.id, exported);
+      forgetBackupDir(user.id);
       await finishSignOut();
     });
   };

@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { offlineDb } from '@/lib/offline/db';
-import { userSales, exportPendingSales, retryUserSales, discardUserSale } from '@/lib/offline/deviceSafety';
+import { userSales, exportPendingSales, exportFingerprint, isUnresolved, retryUserSales, discardUserSale } from '@/lib/offline/deviceSafety';
 import { signalSync, useOfflineStatus } from '@/lib/offline/store';
 import { backupSupported, setUpBackup } from '@/lib/offline/backup';
 import { parseBackup, previewBackup, restoreBackup, type RestorePreview } from '@/lib/offline/restore';
@@ -21,13 +21,17 @@ import type { LocalSale, SaleStatus } from '@/lib/offline/types';
 
 const labels: Record<SaleStatus, string> = { pending: 'Saved on device', syncing: 'Sending…', synced: 'Confirmed by server', needs_attention: 'Needs attention', voided: 'Voided by owner', discarded: 'Discarded on device' };
 export default function PendingSalesSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { user } = useAuth(); const { toast } = useToast();
+  const { user, removeMyDeviceData } = useAuth(); const { toast } = useToast();
   const [records, setRecords] = useState<LocalSale[]>([]);
   const [branches, setBranches] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [discardId, setDiscardId] = useState<string>();
   const [note, setNote] = useState('');
   const [discardBusy, setDiscardBusy] = useState(false);
+  const [retireOpen, setRetireOpen] = useState(false);
+  const [retireBusy, setRetireBusy] = useState(false);
+  const [exported, setExported] = useState<string>();
+  const [recordsUserId, setRecordsUserId] = useState<string>();
   const { storage } = useOfflineStatus();
   const [restore, setRestore] = useState<{ doc: BackupDocument; preview: RestorePreview; name: string }>();
   const [restoreBusy, setRestoreBusy] = useState(false);
@@ -38,16 +42,18 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
   };
   useEffect(() => {
     if (!user || !open) return;
-    setLoading(true);
+    setLoading(true); setRecords([]); setBranches({}); setExported(undefined); setRetireOpen(false);
     const sub = liveQuery(async () => ({ records: await userSales(user.id), rows: await offlineDb.catalog.where('ownerKey').equals(user.id).toArray() }))
-      .subscribe({ next: ({ records, rows }) => { setRecords(records); setBranches(Object.fromEntries(rows.map(r => [r.branchId, r.branch_name || r.branchId]))); setLoading(false); },
+      .subscribe({ next: ({ records, rows }) => { setRecordsUserId(user.id); setRecords(records); setBranches(Object.fromEntries(rows.map(r => [r.branchId, r.branch_name || r.branchId]))); setLoading(false); },
         error: () => { setLoading(false); toast({ title: 'Could not read device sales', variant: 'destructive' }); } });
     return () => sub.unsubscribe();
   }, [user?.id, open, toast]);
+  const ownRecords = recordsUserId === user?.id ? records : [];
+  const removalBlocked = loading || recordsUserId !== user?.id || (ownRecords.some(isUnresolved) && exported !== exportFingerprint(ownRecords));
   const act = async (work: () => Promise<unknown>) => { try { await work(); } catch (e) { toast({ title: 'Action failed', description: e instanceof Error ? e.message : 'Please try again.', variant: 'destructive' }); } };
   return <><Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="w-full sm:max-w-xl flex flex-col gap-4 p-4 sm:p-6">
     <SheetHeader><SheetTitle>Device sales</SheetTitle><SheetDescription>Saved on device is not confirmation by the server.</SheetDescription></SheetHeader>
-    <Button variant="outline" className="self-start" onClick={() => { if (user) void act(() => exportPendingSales(user.id)); }}><Download className="h-4 w-4 mr-2" />Export pending sales</Button>
+    <Button variant="outline" className="self-start" onClick={() => { if (user) void act(async () => setExported(await exportPendingSales(user.id))); }}><Download className="h-4 w-4 mr-2" />Export pending sales</Button>
     <div className="flex flex-wrap gap-2">
       {backupSupported()
         ? <Button variant="outline" onClick={() => { if (user) void act(() => setUpBackup(user.id)); }}><FolderOpen className="h-4 w-4 mr-2" />Set up automatic backup</Button>
@@ -58,7 +64,7 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
     {backupSupported() && <p className="text-xs text-muted-foreground">Suggested folder: Documents\PharmaXpert Backup</p>}
     <p className="text-xs text-muted-foreground">Device storage used: {mb(storage?.usage)} of {mb(storage?.quota)}</p>
     <div className="overflow-y-auto flex-1 space-y-3">
-      {loading ? <p className="text-muted-foreground">Loading…</p> : !records.length ? <p className="text-muted-foreground">No sales saved on this device.</p> : records.map(r => <article key={r.clientTxnId} className="rounded-md border p-4 space-y-2">
+      {loading ? <p className="text-muted-foreground">Loading…</p> : !ownRecords.length ? <p className="text-muted-foreground">No sales saved on this device.</p> : ownRecords.map(r => <article key={r.clientTxnId} className="rounded-md border p-4 space-y-2">
         <div className="flex flex-wrap justify-between gap-2"><span className="font-mono text-sm">{r.clientTxnId.slice(0, 8)}</span><Badge variant={r.status === 'needs_attention' ? 'destructive' : r.status === 'synced' ? 'default' : 'secondary'}>{labels[r.status]}</Badge></div>
         <p className="text-xs text-muted-foreground break-words">{new Date(r.payload.device_created_at || r.createdAt).toLocaleString()} · {r.summary.branch_name || branches[r.branchId] || r.branchId}</p>
         {r.summary.items.map((item, i) => <div key={i} className="flex justify-between gap-3 text-sm"><span className="min-w-0 break-words">{item.name} × {item.quantity}</span><span className="shrink-0">ETB {item.line_total.toFixed(2)}</span></div>)}
@@ -75,9 +81,24 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
         </div>
       </article>)}
     </div>
+    <Button variant="outline" className="self-start text-destructive" onClick={() => setRetireOpen(true)}><Trash2 className="h-4 w-4 mr-2" />Remove my data from this PC</Button>
   </SheetContent></Sheet>
+    <Dialog open={retireOpen} onOpenChange={value => { if (!retireBusy) setRetireOpen(value); }}><DialogContent>
+      <DialogHeader><DialogTitle>Remove my data from this PC?</DialogTitle><DialogDescription>For retiring or handing over a PC only. This deletes your saved sales, prices, account cache and backup folder connection from this PC, then signs you out. Other cashiers’ data and backup files are not deleted. You will need internet to sign in again.</DialogDescription></DialogHeader>
+      {ownRecords.some(isUnresolved) && <p className="text-sm text-destructive">Export your current unresolved sales, including discarded sales, and keep the downloaded file safe before removing your data.</p>}
+      {exported && <p className="text-sm text-muted-foreground">Download requested. Verify the file is safely retained before confirming.</p>}
+      <DialogFooter>
+        <Button disabled={retireBusy} onClick={() => setRetireOpen(false)}>Keep my data</Button>
+        {ownRecords.some(isUnresolved) && <Button variant="outline" disabled={retireBusy} onClick={() => { if (user) void act(async () => setExported(await exportPendingSales(user.id))); }}><Download className="h-4 w-4 mr-2" />Export pending sales</Button>}
+        <Button variant="destructive" disabled={removalBlocked || retireBusy} onClick={() => {
+          if (!user) return;
+          setRetireBusy(true);
+          void act(async () => { try { await removeMyDeviceData(exported); setRetireOpen(false); onOpenChange(false); } finally { setRetireBusy(false); } });
+        }}>Confirm removal</Button>
+      </DialogFooter>
+    </DialogContent></Dialog>
     <Dialog open={!!discardId} onOpenChange={value => { if (!value && !discardBusy) setDiscardId(undefined); }}><DialogContent>
-      <DialogHeader><DialogTitle>Discard device-only sale?</DialogTitle><DialogDescription>This sale was not recorded by the server. Discarding releases its stock reservation. Its history must still be exported before signing out.</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>Discard device-only sale?</DialogTitle><DialogDescription>This sale was not recorded by the server. Discarding releases its stock reservation. Its history stays after sign-out and must be exported before removing your data from this PC.</DialogDescription></DialogHeader>
       <label htmlFor="discard-sale-note" className="text-sm font-medium">Required note</label>
       <Textarea id="discard-sale-note" value={note} onChange={event => setNote(event.target.value)} disabled={discardBusy} />
       <DialogFooter><Button variant="outline" disabled={discardBusy} onClick={() => setDiscardId(undefined)}>Cancel</Button><Button variant="destructive" disabled={!note.trim() || discardBusy} onClick={() => {
@@ -91,7 +112,7 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
       <DialogHeader><DialogTitle>Restore {restore?.name}?</DialogTitle><DialogDescription>Only sales not already on this device are added. They will be sent to the server, which ignores any it already recorded.</DialogDescription></DialogHeader>
       {restore && <div className="text-sm space-y-1">
         <p>Sales in file: {restore.preview.count}</p>
-        <p>Dates: {restore.preview.from ? `${new Date(restore.preview.from).toLocaleString()} – ${new Date(restore.preview.to!).toLocaleString()}` : '—'}</p>
+        <p>Dates: {restore.preview.from && restore.preview.to ? `${new Date(restore.preview.from).toLocaleString()} – ${new Date(restore.preview.to).toLocaleString()}` : '—'}</p>
         <p>Total: ETB {restore.preview.total.toFixed(2)}</p>
         <p>Statuses: {Object.entries(restore.preview.statuses).map(([k, v]) => `${labels[k as SaleStatus] ?? k}: ${v}`).join(', ') || '—'}</p>
       </div>}
