@@ -6,8 +6,29 @@ import { sale } from './rules.test';
 import { offlineDb } from './db';
 import { syncSale } from './syncSale';
 import { availableStock } from './rules';
+import { recoverUserQueue } from './queue';
 Dexie.dependencies.indexedDB = indexedDB; Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 beforeEach(async () => { await offlineDb.open(); await offlineDb.sales.clear(); await offlineDb.catalog.clear(); await offlineDb.meta.clear(); });
+test('same-user sign-in recovers interrupted syncing and sends unchanged stored payload only for that cashier', async () => {
+  const record = { ...sale('syncing'), nextAttemptAt: Date.now() + 300000 };
+  await offlineDb.sales.bulkAdd([record, { ...sale('syncing', 'other-txn'), userId: 'other' }]);
+  await offlineDb.meta.put({ key: 'catalogSync:user:branch', value: 'cached-time' });
+  await offlineDb.catalog.put({ id: 'item', ownerKey: 'user', serverAvailable: 12 } as any);
+  await recoverUserQueue('user');
+  const recovered = await offlineDb.sales.get(record.clientTxnId);
+  if (!recovered) throw new Error('Missing retained sale');
+  expect(recovered.status).toBe('pending');
+  expect(recovered.nextAttemptAt).toBeLessThanOrEqual(Date.now());
+  expect((await offlineDb.sales.get('other-txn'))?.status).toBe('syncing');
+  expect((await offlineDb.catalog.get('item'))?.serverAvailable).toBe(12);
+  expect((await offlineDb.meta.get('catalogSync:user:branch'))?.value).toBe('cached-time');
+  await syncSale(recovered, { sessionValid: async () => true, call: async (payload, mode) => {
+    expect(JSON.stringify(payload)).toBe(JSON.stringify(record.payload)); expect(mode).toBe('offline');
+    return { data: { status: 'synced', sale_id: 'server-id', duplicate: true }, error: null };
+  } });
+  expect((await offlineDb.sales.get(record.clientTxnId))?.status).toBe('synced');
+  expect((await offlineDb.sales.get('other-txn'))?.status).toBe('syncing');
+});
 test('legacy online-mode fully paid record retries offline with byte-identical payload', async () => {
   const record = { ...sale('pending'), mode: 'online' as const };
   await offlineDb.sales.add(record);

@@ -20,9 +20,17 @@ Dexie uses IndexedDB database `pharmaxpert-offline`:
 
 Metadata is namespaced by user (for example `profile:<userId>` and `catalogSync:<userId>:<branchId>`). Catalog rows are filtered by user and branch; sales are filtered by user. No passwords or new auth tokens are stored in Dexie. Offline identity reads the existing auth SDK session; exports do not include that session or metadata.
 
-Displayed availability is serverAvailable minus base quantities reserved by pending, syncing and needs_attention local sales. serverAvailable sums remaining quantities in non-expired batches; items with no batch rows use branch quantity. Synced and voided records do not reserve stock. Confirmed records are kept for 30 days. Unresolved records are never deleted automatically; explicit exported sign-out removes them along with the departing user's catalog, metadata and local history. Never sign out to fix a queue without exporting first.
+Displayed availability is serverAvailable minus base quantities reserved by the current cashier's pending, syncing and needs_attention local sales. Other cashiers' records do not reserve this cashier's stock. serverAvailable sums remaining quantities in non-expired batches; items with no batch rows use branch quantity. Synced and voided records do not reserve stock. Confirmed records are kept for 30 days. Unresolved records are never deleted automatically. Normal sign-out preserves all sales (any status), cached catalog, access metadata, sync times, device ID and backup folder connection; no export is required.
 
-Dexie version 2 retains the same tables, keys and indexes and adds optional discard note/actor/time fields. Device-only refusals (needs_attention with no issueId) allow unchanged Retry or required-note Discard. Discarded records release stock, remain visible in history, are included in exports and block sign-out cleanup until exported. They are never deleted automatically. Server-owned issues cannot be discarded locally.
+Dexie version 2 retains the same tables, keys and indexes and adds optional discard note/actor/time fields. Device-only refusals (needs_attention with no issueId) allow unchanged Retry or required-note Discard. Discarded records release stock, remain visible in history, are included in exports and block explicit retirement cleanup until exported. They are never deleted automatically. Server-owned issues cannot be discarded locally.
+
+## Sign-out and shared PCs
+
+Normal sign-out, online or offline, clears the authentication session and displayed account state only. Saved sales and prices stay on this PC. Internet is required to sign in again: offline startup with no session is still denied. The offline sign-out dialog warns that nobody can sign in or make sales until internet returns and makes **Stay signed in** the primary choice.
+
+When the same cashier signs in, interrupted `syncing` records reset to `pending` and resume normal automatic sync with their original IDs and payloads. Their saved catalog remains available until refreshed. Device-only refusals require Retry/review and discarded records remain history; these are not automatically sent.
+
+If another cashier signs in, Sales shows only the count of other cashiers' unresolved records. No names, amounts or items are exposed. Those records never appear in the signed-in cashier's device list, exports, backup, totals or stock reservations, and sync only when their original cashier signs in.
 
 ## Storage protection
 
@@ -74,19 +82,19 @@ Queued retries derive mode from the original payload: fully paid sales without d
 
 ## Recovery procedure
 
-1. Open Device sales and export pending sales to JSON before clearing data, signing out or replacing the device. Keep it securely: it contains sale payloads and may contain customer IDs.
+1. Open Device sales and export pending sales to JSON before clearing/removing data or replacing the device. Normal sign-out does not delete records or require export. Keep recovery files securely: they contain sale payloads and may contain customer IDs.
 2. On the same device, sign in as the original cashier, reconnect, choose Retry now / Sync now, and wait for confirmed results. Unknown outcomes always reuse the existing ID; never manually enter a second sale.
 3. On a different device/login, online owner reconciliation can resolve issues already received by the server. Local-only pending records do not appear there until uploaded.
-4. Keep exported JSON for recovery of local-only records. This release has **no JSON import/upload control**. An authorized support recovery must restore/replay each original payload with the same transaction ID, same original user and mode; do not recreate sales with fresh IDs. Never paste tokens into a recovery file.
+4. Keep exported JSON for recovery of local-only records. For automatic backup files, use **Restore from backup file** while signed in as the original cashier (see above). Keep transaction IDs and payloads unchanged; never recreate sales with fresh IDs or paste tokens into recovery files.
 5. Owners restock/fix the underlying issue then Retry, accept a price conflict where appropriate, or Void with a note. Refresh until the authoritative result is visible. Cashier local reservations release when the server resolution can be read.
 
 ## Device decommissioning
 
 1. Reconnect and sync until 0 pending/sending **and 0 needs attention**.
 2. Reconcile remaining conflicts; export a recovery copy and verify the download is safely retained.
-3. Sign out. If unresolved records remain, export is mandatory before Sign out anyway; a new/changed unresolved record requires a fresh export.
-4. Clear site data only after verifying server results or keeping an export.
-5. Uninstall the PWA and remove downloaded customer/sale exports from the retired device according to your retention policy.
+3. While still signed in, open Device sales → **Remove my data from this PC**. This is a separate, explicit retirement/handover action, never normal sign-out. If pending, syncing, needs_attention or discarded records remain, export is mandatory; any new/changed unresolved record requires a fresh export. Verify the download, then confirm removal.
+4. Removal rechecks export coverage under the POS lock and deletes only your own sales, catalog and user-scoped metadata (including your backup folder connection), then signs you out. Other cashiers' records and backup files stay untouched. The shared device ID is retained. Each cashier must separately retire their own data before clearing all site data.
+5. Clear site data only after all cashiers' records are confirmed or securely exported. Uninstall the PWA and remove downloaded customer/sale exports from the retired device according to your retention policy.
 
 ## Published-app manual acceptance checklist
 
@@ -101,8 +109,10 @@ Queued retries derive mode from the original payload: fully paid sales without d
 - [ ] Switch branch/user; confirm isolation of catalog, queue/export and server issue list; staff cannot open owner reconciliation.
 - [ ] Create an insufficient-stock conflict from another device; verify needs-attention mapping/reservation and owner Retry after restock.
 - [ ] Exercise PRICE_CHANGED accept-price retry, required-note Void, and read-only history; verify final cashier status.
-- [ ] Export all unresolved statuses; inspect full payloads and absence of credentials. Confirm sign-out is disabled before export and invalidates export after a new sale.
-- [ ] Sync to zero then sign out; verify the departing user's catalog/meta are gone and no unrelated user records are deleted.
+- [ ] Sign out online/offline without export; verify all sales, catalog/meta and backup connection stay. Offline sign-out warns that internet is required to sign in again.
+- [ ] Sign in again as the same cashier; verify interrupted syncing records resume and cached catalog is reused. Without a session, offline startup remains denied.
+- [ ] Sign in as another cashier; verify only the other-cashier count is visible and their records do not affect list/export/backup/totals/stock.
+- [ ] Export all unresolved statuses; inspect payloads and absence of credentials. Explicit **Remove my data from this PC** is blocked until current export, invalidates stale export, and removes only your own data after confirmation.
 - [ ] Recover on the original device/login; for a replacement device follow the export/support recovery procedure above.
 - [ ] Exercise blocked/private storage and cleared-site-data behavior without using real unexported sales.
 
@@ -120,7 +130,7 @@ Review-fix verification: the complete `bun test` suite passed 89 tests with 0 fa
 
 Tests cover stock/credit rules, durable queue, original-ID retries, duplicate settlement, export filtering, export-gated isolated cleanup and reconciliation action rules. Browser fixtures verify UI flows with simulated cached identities/server responses; they do not prove live authorization or real server checkout. A real original-app session is unavailable here, and the app is not published: authenticated server acceptance and published offline startup remain manual checks.
 
-Part 2 simulated browser checks verified a real local checkout/export with its original payload, disabled sign-out before export, enabled sign-out after export, and cleared sales/catalog/meta on completed offline sign-out. Mocked owner flows verified price acceptance, required-note voiding, refreshed read-only history, and no phone-width overflow or page errors.
+Earlier simulated sign-out checks described export-gated deletion; that behavior is superseded by sign-out retention and explicit retirement. No browser/device verification is claimed for this change; the checklist above must be exercised on the published app.
 
 ## Part 2 files created / changed
 

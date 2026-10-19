@@ -12,7 +12,8 @@ mock.module('./network', () => ({
   setTimeout(() => { work().then(resolve, reject); }, 0);
 }) }));
 const { offlineDb } = await import('./db');
-const { clearUserDeviceData, exportDocument, exportFingerprint, retryUserSales, discardUserSale } = await import('./deviceSafety');
+const { clearUserDeviceData, exportDocument, exportFingerprint, retryUserSales, discardUserSale, userSales, otherUserUnresolvedCount } = await import('./deviceSafety');
+const { buildBackupDocument } = await import('./backup');
 const { settleSale } = await import('./queue');
 const { availableStock } = await import('./rules');
 beforeEach(async () => { await offlineDb.open(); await offlineDb.sales.clear(); await offlineDb.catalog.clear(); await offlineDb.meta.clear(); });
@@ -90,11 +91,24 @@ test('server-owned issues and other users cannot be discarded or manually retrie
 test('exported cleanup removes only departing user sales, catalog and metadata', async () => {
   const record = sale('pending'); await offlineDb.sales.bulkAdd([record, { ...sale('pending', 'other-txn'), userId: 'other' }]);
   await offlineDb.catalog.bulkPut([{ id: 'own', ownerKey: 'user' }, { id: 'other', ownerKey: 'other' }] as any);
-  await offlineDb.meta.bulkPut([{ key: 'profile:user', value: {} }, { key: 'catalogSync:user:branch', value: 'date' }, { key: 'profile:other', value: {} }]);
+  await offlineDb.meta.bulkPut([{ key: 'profile:user', value: {} }, { key: 'catalogSync:user:branch', value: 'date' }, { key: 'backupDir:user', value: {} }, { key: 'backupDir:other', value: {} }, { key: 'deviceId', value: 'device' }, { key: 'profile:other', value: {} }]);
   await clearUserDeviceData('user', exportFingerprint([record]));
   expect((await offlineDb.sales.toArray()).map(r => r.userId)).toEqual(['other']);
   expect((await offlineDb.catalog.toArray()).map(r => r.id)).toEqual(['other']);
-  expect((await offlineDb.meta.toArray()).map(r => r.key)).toEqual(['profile:other']);
+  expect((await offlineDb.meta.toArray()).map(r => r.key)).toEqual(['backupDir:other', 'deviceId', 'profile:other']);
+});
+test('other cashiers are count-only and excluded from current list, export, backup, totals and reservations', async () => {
+  const own = sale('pending');
+  const others = ['pending', 'syncing', 'needs_attention', 'discarded', 'synced', 'voided'].map((s, i) => ({ ...sale(s as Parameters<typeof sale>[0], `other-${i}`), userId: 'other' }));
+  await offlineDb.sales.bulkAdd([own, ...others]);
+  expect(await otherUserUnresolvedCount('user')).toBe(4);
+  const list = await userSales('user');
+  expect(list.map(r => r.clientTxnId)).toEqual(['txn']);
+  expect(list.reduce((n, r) => n + r.summary.total, 0)).toBe(20);
+  expect(availableStock(12, 'item', list)).toBe(10);
+  const all = await offlineDb.sales.toArray();
+  expect(exportDocument(all, 'user').sales.map(r => r.clientTxnId)).toEqual(['txn']);
+  expect(buildBackupDocument(all, 'user', 'dev').sales.map(r => r.clientTxnId)).toEqual(['txn']);
 });
 test('no unresolved records permits cleanup without export', async () => {
   await offlineDb.sales.add(sale('synced')); await offlineDb.meta.put({ key: 'profile:user', value: {} });

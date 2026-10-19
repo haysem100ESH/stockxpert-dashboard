@@ -19,6 +19,15 @@ beforeEach(async () => {
 });
 afterAll(async () => { await offlineDb.delete(); });
 describe('durable checkout transaction', () => {
+  test('other-cashier reservations in the same branch do not prevent current cashier checkout', async () => {
+    const other = { ...sale('pending', 'other-txn'), userId: 'other' };
+    other.payload = { ...other.payload, items: [{ ...other.payload.items[0], base_quantity: 12 }] };
+    await offlineDb.sales.add(other);
+    await enqueueSale(sale('pending'), true);
+    const own = await offlineDb.sales.where('userId').equals('user').toArray();
+    expect(availableStock(12, 'item', own)).toBe(10);
+    expect((await offlineDb.sales.get('other-txn'))?.payload).toEqual(other.payload);
+  });
   test('committed sale reserves stock and survives reopen', async () => {
     await enqueueSale(sale('pending'), true); offlineDb.close(); await offlineDb.open();
     const item = await offlineDb.catalog.get('item');
