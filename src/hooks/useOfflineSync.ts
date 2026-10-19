@@ -5,7 +5,8 @@ import { useAuth } from './useAuth';
 import { offlineDb, readMeta } from '@/lib/offline/db';
 import { callPos, checkReachability, validSession, withPosLock } from '@/lib/offline/network';
 import { getOfflineState, setOfflineState } from '@/lib/offline/store';
-import { retryDelay, SYNCED_RETENTION_MS } from '@/lib/offline/rules';
+import { retryMode, SYNCED_RETENTION_MS } from '@/lib/offline/rules';
+import { syncSale } from '@/lib/offline/syncSale';
 import { settleSale } from '@/lib/offline/queue';
 import { saleEffects } from '@/lib/offline/effects';
 import { fetchCatalog, replaceCatalog } from '@/lib/offline/catalog';
@@ -54,7 +55,7 @@ export function useOfflineSync() {
               if (data.status !== 'voided') {
                 // Do not assume an issue-table sale-ID column. The original ID
                 // safely reads back an already reconciled sale through the RPC.
-                const reply = await callPos(record.payload, record.mode);
+                const reply = await callPos(record.payload, retryMode(record.payload));
                 if (reply.error || reply.data?.status !== 'synced') continue;
                 resolution = { ...reply.data, duplicate: true } as RpcResult;
               }
@@ -70,12 +71,12 @@ export function useOfflineSync() {
           for (const record of pending) {
             if (disposed || (record.nextAttemptAt ?? 0) > Date.now()) break;
             setOfflineState({ connection: 'syncing' });
-            await offlineDb.sales.update(record.clientTxnId, { status: 'syncing', updatedAt: new Date().toISOString() });
-            try {
-              const { data, error } = await callPos(record.payload, record.mode);
-              if (error || !data || !['synced', 'needs_attention', 'voided', 'rejected'].includes(data.status)) throw error ?? new Error('Unknown server outcome');
-              const result = data as RpcResult;
-              await settleSale(record, result);
+              const result = await syncSale(record);
+              if (!result) {
+                if (await checkReachability()) await validSession(userId);
+                if ((await offlineDb.sales.get(record.clientTxnId))?.status === 'pending') break;
+                continue;
+              }
               if (result.status === 'synced') {
                 await saleEffects(record, result);
                 try {
@@ -85,14 +86,6 @@ export function useOfflineSync() {
                 queryClient.invalidateQueries();
                 window.dispatchEvent(new Event('app:refresh'));
               }
-            } catch (error) {
-              const attempts = record.attempts + 1;
-              await offlineDb.sales.update(record.clientTxnId, { status: 'pending', attempts,
-                nextAttemptAt: Date.now() + retryDelay(attempts), updatedAt: new Date().toISOString(),
-                lastError: error instanceof Error ? error.message : 'Could not confirm server outcome' });
-              if (await checkReachability()) await validSession(userId);
-              break;
-            }
           }
         });
       } catch { setOfflineState({ storageError: 'Local storage is unavailable. Pending sales have not been removed.' }); }
