@@ -4,6 +4,7 @@ import { offlineDb } from './db';
 import { newSaleActivityFields, pendingActivityRows, pendingActivityCounts, readActivityCache, saveActivityCache, offlineActivityMessage } from './activity';
 import { sale } from './rules.test';
 import type { ActivityRow } from '@/hooks/useActivityFeed';
+import { reasonMessage } from './rules';
 
 beforeEach(async () => { await offlineDb.open(); await offlineDb.sales.clear(); await offlineDb.meta.clear(); });
 afterAll(async () => { await offlineDb.delete(); });
@@ -33,7 +34,7 @@ test('pending, syncing, needs-attention and discarded have correct statuses; syn
   const attention = records.find(record => record.status === 'needs_attention');
   if (attention) attention.reasonCode = 'PRICE_CHANGED';
   const rows = pendingActivityRows(records, 'user', [], range);
-  expect(rows.map(row => row.pendingBadge)).toEqual(['Pending sync', 'Syncing', 'Needs attention: The price has changed. Refresh prices and try again.', 'Discarded — not recorded']);
+  expect(rows.map(row => row.pendingBadge)).toEqual(['Pending sync', 'Syncing', `Needs attention: ${reasonMessage('PRICE_CHANGED')}`, 'Discarded — not recorded']);
   expect(rows.length).toBe(4);
 });
 test('metadata transaction ID hides the local pending row once its server row exists', () => {

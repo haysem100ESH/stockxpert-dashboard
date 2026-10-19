@@ -3,6 +3,7 @@ import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import Dexie from 'dexie';
 import { beforeEach, afterAll, expect, mock, test } from 'bun:test';
 import { sale } from './rules.test';
+import { newSaleActivityFields } from './activity';
 
 Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
@@ -37,6 +38,23 @@ test('online checkout calls atomic RPC exactly once', async () => {
   expect((await submitSale(record.payload, 'user', record.summary)).status).toBe('synced');
   expect(calls).toEqual([{ payload: record.payload, mode: 'online' }]);
   expect((await offlineDb.sales.get('txn'))?.serverSaleId).toBe('server-id');
+});
+test('new online checkout sends atomic activity flag and device timestamp unchanged', async () => {
+  const record = sale('pending');
+  record.payload = { ...record.payload, ...newSaleActivityFields(new Date('2026-10-19T08:00:00Z')) };
+  await submitSale(record.payload, 'user', record.summary);
+  expect(calls[0]?.payload).toEqual(record.payload);
+  expect((await offlineDb.sales.get('txn'))?.payload.server_activity).toBe(true);
+  expect((await offlineDb.sales.get('txn'))?.payload.device_created_at).toBe('2026-10-19T08:00:00.000Z');
+});
+test('new offline checkout stores atomic activity flag and device timestamp unchanged', async () => {
+  reachable = false;
+  const record = sale('pending');
+  record.payload = { ...record.payload, ...newSaleActivityFields(new Date('2026-10-19T08:00:00Z')) };
+  await submitSale(record.payload, 'user', record.summary);
+  expect(calls.length).toBe(0);
+  expect((await offlineDb.sales.get('txn'))?.payload).toEqual(record.payload);
+  expect((await offlineDb.sales.get('txn'))?.payload.server_activity).toBe(true);
 });
 test('online rejection saves nothing and keeps retry ID available', async () => {
   response = { data: { status: 'rejected', reason_code: 'PRICE_CHANGED' }, error: null };
