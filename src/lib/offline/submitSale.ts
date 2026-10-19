@@ -6,7 +6,8 @@ import { hasCredit, reasonMessage, retryMode } from './rules';
 import { errorMessage, isPermanentPosError } from './errors';
 import { saleEffects } from './effects';
 import { fetchCatalog, replaceCatalog } from './catalog';
-import { signalSync } from './store';
+import { signalBackupNow, signalSync } from './store';
+import { ensureOfflineSaveAllowed } from './storageGuard';
 
 export type SubmitResult = { status: 'synced' | 'saved'; message?: string; saleId?: string };
 export class UnknownOutcomeStorageError extends Error {}
@@ -24,7 +25,10 @@ export async function submitSale(payload: PosPayload, userId: string, summary: S
     const record: LocalSale = { clientTxnId: payload.client_txn_id, userId, branchId: payload.branch_id,
       payload, summary, creditScore, mode: reachable ? 'online' : 'offline', status: 'pending', attempts: 0, createdAt: now, updatedAt: now };
     if (!reachable) {
+      const blocked = await ensureOfflineSaveAllowed();
+      if (blocked) throw new Error(blocked);
       await enqueueSale(record, true);
+      try { signalBackupNow(); } catch { /* Backup must never fail checkout. */ }
       signalSync();
       return { status: 'saved', message: 'Saved on this device (not yet confirmed by server)' };
     }

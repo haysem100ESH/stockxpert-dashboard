@@ -24,6 +24,35 @@ Displayed availability is serverAvailable minus base quantities reserved by pend
 
 Dexie version 2 retains the same tables, keys and indexes and adds optional discard note/actor/time fields. Device-only refusals (needs_attention with no issueId) allow unchanged Retry or required-note Discard. Discarded records release stock, remain visible in history, are included in exports and block sign-out cleanup until exported. They are never deleted automatically. Server-owned issues cannot be discarded locally.
 
+## Storage protection
+
+On sign-in/app start, and again right before the first offline save of a session, the app calls `navigator.storage.persist()` if storage is not yet persisted and reads `navigator.storage.estimate()`. The header shows **Storage protected** (green) or **Storage NOT protected** (red).
+
+- **Private-like window** (not persisted and quota under 300 MB — the Chrome/Edge incognito pattern) or unusable IndexedDB: offline checkout is blocked with "Offline sales are disabled in this window. Open PharmaXpert from its installed app icon (not a private window)." Online checkout is unaffected.
+- **Not persisted, normal window:** offline sales are allowed, but once per session the cashier must acknowledge a red warning to install the app and open it from its icon.
+- The Device sales panel shows storage used / available.
+
+## Automatic backup (Chrome/Edge desktop)
+
+Cashier setup (once per PC, per cashier):
+1. Install the app (install icon in the address bar) and open it from that icon.
+2. Click the status badge in the header → **Set up automatic backup**.
+3. Choose or create the folder `Documents\PharmaXpert Backup` and allow editing.
+4. The header shows "Backup up to date HH:MM".
+
+Behavior: after every change to this cashier's local sales the app writes (2 s debounce; immediately after a new offline save) `pharmaxpert-backup-<first 8 of userId>-<deviceId>-latest.json` plus a dated copy `...-YYYY-MM-DD.json` (Addis Ababa date). Only the newest 7 dated copies of that exact cashier+device prefix are kept. Contents use the same field allowlist as Export (no tokens, no other cashiers), covering pending, syncing, needs-attention, discarded and synced-within-retention records, with header `format: pharmaxpert-backup`, `version: 1`, `userId`, `deviceId`, `generatedAt`. A backup failure never blocks checkout or sync; it only changes the indicator ("Backup paused — click to resume", "Backup failing: <reason>", "Backup not set up", "Backup not supported"). Browsers without the folder API hide backup setup and say "use Export daily".
+
+## Restore from a backup file
+
+1. The cashier who made the sales signs in (any PC).
+2. Device sales panel → **Restore from backup file** → pick a `.json` backup or export.
+3. Files from another cashier are refused ("This backup belongs to another cashier…"), so sales stay attributed to their real seller. Malformed files or unknown versions are refused.
+4. Review the preview (count, dates, total, statuses) and confirm.
+5. Only transaction IDs not already on the device are added, payloads unchanged. Unresolved records become pending (discarded stays discarded; issue/discard fields kept); synced records are skipped. Sync then sends them, and the server returns already-recorded sales as duplicates, so nothing is counted twice.
+6. The result shows restored / already present / skipped (synced) / invalid counts.
+
+Limitations: the backup lives on that PC unless the folder is on a USB drive or OneDrive; the browser may need one click per session ("Backup paused — click to resume") to grant folder access again; backups are not encrypted, so protect the folder.
+
 ## Existing server contract
 
 `process_pos_sale(p_payload, p_mode)` owns sale processing in an atomic transaction: sales, sale_items, FIFO deduction of non-expired batches, sale_item_batches, branch quantity synchronization, and online customer credit. Unique `sales.client_txn_id` provides idempotency: repeating the same original payload/ID never creates a second sale. The server checks current permission/branch, quantity, totals, stock, expiry, price and packaging. Any live batch's selling price is accepted. Offline credit is refused.

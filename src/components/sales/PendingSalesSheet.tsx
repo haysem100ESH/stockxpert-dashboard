@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { liveQuery } from 'dexie';
-import { Download, RefreshCw, Trash2 } from 'lucide-react';
+import { Download, FolderOpen, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +10,12 @@ import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { offlineDb } from '@/lib/offline/db';
 import { userSales, exportPendingSales, retryUserSales, discardUserSale } from '@/lib/offline/deviceSafety';
-import { signalSync } from '@/lib/offline/store';
+import { signalSync, useOfflineStatus } from '@/lib/offline/store';
+import { backupSupported, setUpBackup } from '@/lib/offline/backup';
+import { parseBackup, previewBackup, restoreBackup, type RestorePreview } from '@/lib/offline/restore';
+import type { BackupDocument } from '@/lib/offline/backup';
+
+const mb = (n?: number) => n === undefined ? '?' : `${(n / 1024 / 1024).toFixed(1)} MB`;
 import { reasonMessage } from '@/lib/offline/rules';
 import type { LocalSale, SaleStatus } from '@/lib/offline/types';
 
@@ -23,6 +28,14 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
   const [discardId, setDiscardId] = useState<string>();
   const [note, setNote] = useState('');
   const [discardBusy, setDiscardBusy] = useState(false);
+  const { storage } = useOfflineStatus();
+  const [restore, setRestore] = useState<{ doc: BackupDocument; preview: RestorePreview; name: string }>();
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const pickRestoreFile = async (file: File | undefined) => {
+    if (!file || !user) return;
+    try { const doc = parseBackup(await file.text(), user.id); setRestore({ doc, preview: previewBackup(doc), name: file.name }); }
+    catch (e) { toast({ title: `${file.name}: cannot restore`, description: e instanceof Error ? e.message : 'Invalid file.', variant: 'destructive' }); }
+  };
   useEffect(() => {
     if (!user || !open) return;
     setLoading(true);
@@ -35,6 +48,15 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
   return <><Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="w-full sm:max-w-xl flex flex-col gap-4 p-4 sm:p-6">
     <SheetHeader><SheetTitle>Device sales</SheetTitle><SheetDescription>Saved on device is not confirmation by the server.</SheetDescription></SheetHeader>
     <Button variant="outline" className="self-start" onClick={() => { if (user) void act(() => exportPendingSales(user.id)); }}><Download className="h-4 w-4 mr-2" />Export pending sales</Button>
+    <div className="flex flex-wrap gap-2">
+      {backupSupported()
+        ? <Button variant="outline" onClick={() => { if (user) void act(() => setUpBackup(user.id)); }}><FolderOpen className="h-4 w-4 mr-2" />Set up automatic backup</Button>
+        : <p className="text-sm text-muted-foreground">Automatic backup is not supported in this browser — use Export daily.</p>}
+      <Button variant="outline" asChild><label className="cursor-pointer"><Upload className="h-4 w-4 mr-2" />Restore from backup file
+        <input type="file" accept="application/json,.json" className="sr-only" onChange={event => { void pickRestoreFile(event.target.files?.[0]); event.target.value = ''; }} /></label></Button>
+    </div>
+    {backupSupported() && <p className="text-xs text-muted-foreground">Suggested folder: Documents\PharmaXpert Backup</p>}
+    <p className="text-xs text-muted-foreground">Device storage used: {mb(storage?.usage)} of {mb(storage?.quota)}</p>
     <div className="overflow-y-auto flex-1 space-y-3">
       {loading ? <p className="text-muted-foreground">Loading…</p> : !records.length ? <p className="text-muted-foreground">No sales saved on this device.</p> : records.map(r => <article key={r.clientTxnId} className="rounded-md border p-4 space-y-2">
         <div className="flex flex-wrap justify-between gap-2"><span className="font-mono text-sm">{r.clientTxnId.slice(0, 8)}</span><Badge variant={r.status === 'needs_attention' ? 'destructive' : r.status === 'synced' ? 'default' : 'secondary'}>{labels[r.status]}</Badge></div>
@@ -64,5 +86,22 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
         setDiscardBusy(true);
         void act(async () => { try { await discardUserSale(user.id, txnId, note); setDiscardId(undefined); } finally { setDiscardBusy(false); } });
       }}>Confirm discard</Button></DialogFooter>
+    </DialogContent></Dialog>
+    <Dialog open={!!restore} onOpenChange={value => { if (!value && !restoreBusy) setRestore(undefined); }}><DialogContent>
+      <DialogHeader><DialogTitle>Restore {restore?.name}?</DialogTitle><DialogDescription>Only sales not already on this device are added. They will be sent to the server, which ignores any it already recorded.</DialogDescription></DialogHeader>
+      {restore && <div className="text-sm space-y-1">
+        <p>Sales in file: {restore.preview.count}</p>
+        <p>Dates: {restore.preview.from ? `${new Date(restore.preview.from).toLocaleString()} – ${new Date(restore.preview.to!).toLocaleString()}` : '—'}</p>
+        <p>Total: ETB {restore.preview.total.toFixed(2)}</p>
+        <p>Statuses: {Object.entries(restore.preview.statuses).map(([k, v]) => `${labels[k as SaleStatus] ?? k}: ${v}`).join(', ') || '—'}</p>
+      </div>}
+      <DialogFooter><Button variant="outline" disabled={restoreBusy} onClick={() => setRestore(undefined)}>Cancel</Button><Button disabled={restoreBusy} onClick={() => {
+        if (!user || !restore) return;
+        const { doc, name } = restore; setRestoreBusy(true);
+        void act(async () => { try {
+          const r = await restoreBackup(doc, user.id); signalSync(); setRestore(undefined);
+          toast({ title: `${name}: restore finished`, description: `Restored ${r.restored}, already present ${r.present}, skipped (synced) ${r.skippedSynced}, invalid ${r.invalid}.` });
+        } finally { setRestoreBusy(false); } });
+      }}>Confirm restore</Button></DialogFooter>
     </DialogContent></Dialog></>;
 }

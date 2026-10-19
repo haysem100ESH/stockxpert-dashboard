@@ -10,15 +10,18 @@ export async function userSales(userId: string) {
   return (await offlineDb.sales.where('userId').equals(userId).sortBy('createdAt')).reverse();
 }
 // Explicit allowlist: never export auth storage, cached profiles or credentials.
+export const EXPORT_FIELDS = ['clientTxnId', 'userId', 'branchId', 'payload', 'mode', 'status', 'attempts', 'lastError',
+  'reasonCode', 'reasonDetail', 'serverSaleId', 'issueId', 'summary', 'createdAt', 'updatedAt', 'syncedAt',
+  'discardNote', 'discardedBy', 'discardedAt'] as const;
+export type ExportedSale = Pick<LocalSale, typeof EXPORT_FIELDS[number]>;
+export function exportRecord(r: LocalSale): ExportedSale {
+  const out: Record<string, unknown> = {};
+  for (const key of EXPORT_FIELDS) out[key] = r[key];
+  return out as ExportedSale;
+}
 export function exportDocument(records: LocalSale[], userId: string) {
   return { format: 'pharmaxpert-pos-export', version: 1, exportedAt: new Date().toISOString(),
-    sales: records.filter(r => r.userId === userId && isUnresolved(r)).map(r => ({
-      clientTxnId: r.clientTxnId, userId: r.userId, branchId: r.branchId, payload: r.payload,
-      mode: r.mode, status: r.status, attempts: r.attempts, lastError: r.lastError,
-      reasonCode: r.reasonCode, reasonDetail: r.reasonDetail, serverSaleId: r.serverSaleId,
-      issueId: r.issueId, summary: r.summary, createdAt: r.createdAt, updatedAt: r.updatedAt,
-      discardNote: r.discardNote, discardedBy: r.discardedBy, discardedAt: r.discardedAt,
-    })) };
+    sales: records.filter(r => r.userId === userId && isUnresolved(r)).map(exportRecord) };
 }
 export async function exportPendingSales(userId: string): Promise<string> {
   const records = await userSales(userId);
