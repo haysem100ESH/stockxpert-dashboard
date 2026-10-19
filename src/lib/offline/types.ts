@@ -17,6 +17,7 @@ export interface PosItem {
   stripes_sold: number | null;
 }
 export interface PosPayload {
+  server_activity?: boolean;
   client_txn_id: string;
   branch_id: string;
   sale_date: string;

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import type { StaffGoal } from './useStaffGoals';
+import { useActivitySnapshot } from './useActivitySnapshot';
 
 function startOfDay(d = new Date()) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function startOfWeek(d = new Date()) { const x = startOfDay(d); const day = x.getDay(); const diff = (day === 0 ? -6 : 1 - day); x.setDate(x.getDate()+diff); return x; }
@@ -35,33 +36,33 @@ export function goalPeriod(goal: StaffGoal): { from: Date; to: Date; key: string
 export function useGoalProgress(goal: StaffGoal, onComplete?: (g: StaffGoal) => void) {
   const { user } = useAuth();
   const period = useMemo(() => goalPeriod(goal), [goal]);
-  const [count, setCount] = useState(0);
-  const [completedThisPeriod, setCompletedThisPeriod] = useState(false);
 
   const load = useCallback(async () => {
-    if (!user) return;
-    const { count: realCount } = await (supabase as any)
+    if (!user) return { count: 0, completedThisPeriod: false };
+    const { count: realCount, error: countError } = await (supabase as any)
       .from('activity_log')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', user.id)
       .gte('created_at', period.from.toISOString())
       .lt('created_at', period.to.toISOString());
-    setCount(realCount ?? 0);
 
-    const { data: comp } = await (supabase as any)
+    const { data: comp, error: completionError } = await (supabase as any)
       .from('staff_goal_completions')
       .select('id')
       .eq('goal_id', goal.id)
       .eq('staff_id', user.id)
       .eq('period_key', period.key)
       .maybeSingle();
-    setCompletedThisPeriod(!!comp);
+    if (countError || completionError) throw countError ?? completionError;
+    return { count: realCount ?? 0, completedThisPeriod: !!comp };
   }, [user, goal.id, period.from, period.to, period.key]);
 
-  useEffect(() => { load(); }, [load]);
+  const snapshot = useActivitySnapshot(user?.id, `goalProgress:${goal.id}:${period.key}`, { count: 0, completedThisPeriod: false }, load);
+  const { count, completedThisPeriod } = snapshot.data;
+  const { setData } = snapshot;
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || snapshot.offline) return;
     const ch = (supabase as any)
       .channel(`goal-progress-${goal.id}-${user.id}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_log' }, (payload: any) => {
@@ -69,25 +70,27 @@ export function useGoalProgress(goal: StaffGoal, onComplete?: (g: StaffGoal) => 
         if (r.user_id !== user.id) return;
         const ts = new Date(r.created_at);
         if (ts < period.from || ts >= period.to) return;
-        setCount((c) => c + 1);
+        setData((data) => ({ ...data, count: data.count + 1 }));
       })
       .subscribe();
     return () => { (supabase as any).removeChannel(ch); };
-  }, [user, goal.id, period.from, period.to]);
+  }, [user, goal.id, period.from, period.to, snapshot.offline, setData]);
 
   // Trigger completion exactly once per period
   useEffect(() => {
-    if (!user) return;
+    if (!user || snapshot.offline || snapshot.loading) return;
     if (completedThisPeriod) return;
     if (count < goal.target_count) return;
     (async () => {
       await (supabase as any).rpc('record_goal_completion', { p_goal_id: goal.id, p_period_key: period.key });
-      setCompletedThisPeriod(true);
+      setData(data => ({ ...data, completedThisPeriod: true }));
       onComplete?.(goal);
     })();
-  }, [count, goal, period.key, completedThisPeriod, user, onComplete]);
+  }, [count, goal, period.key, completedThisPeriod, user, onComplete, snapshot.offline, snapshot.loading, setData]);
 
   return {
+    cacheMissing: snapshot.cacheMissing,
+    banner: snapshot.banner,
     count,
     target: goal.target_count,
     percent: Math.min(100, Math.round((count / goal.target_count) * 100)),

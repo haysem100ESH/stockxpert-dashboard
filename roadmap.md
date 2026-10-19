@@ -1,5 +1,10 @@
 # Offline POS — part 1
 
+## Offline Activity Center and atomic sale activity
+- [x] Flag new payloads and preserve legacy logging and credit effects
+- [x] Cache loaded activity feeds, counts, goals and owner views per user; show local pending rows without duplication
+- [x] Full Bun suite: 135 pass, 0 fail, 394 assertions; initial corrected test failure documented; no browser/device verification
+
 ## Shared-stock reservation fix
 - [x] Reserve stock across all cashiers on this PC within the same branch
 - [x] Test status/branch isolation, catalog refresh without double counting, and unchanged private records

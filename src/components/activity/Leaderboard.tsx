@@ -10,6 +10,8 @@ import { Calendar } from '@/components/ui/calendar';
 import { Trophy, Calendar as CalendarIcon, Medal, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { useActivitySnapshot } from '@/hooks/useActivitySnapshot';
+import { usePendingActivities } from '@/hooks/usePendingActivities';
 
 interface StaffRow { id: string; full_name: string | null; branch_id: string | null }
 interface BranchRow { id: string }
@@ -48,7 +50,7 @@ async function countActivitiesByStaff(staffIds: string[], range: { from?: Date; 
       const { count, error } = await q;
       if (error) {
         console.warn('[Leaderboard] activity count query error', error);
-        return [staffId, 0] as const;
+        throw error;
       }
       return [staffId, count ?? 0] as const;
     }));
@@ -59,53 +61,50 @@ async function countActivitiesByStaff(staffIds: string[], range: { from?: Date; 
   return counts;
 }
 
-export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: StaffRow, range: LeaderboardRange) => void }) {
+export default function Leaderboard({ onSelectStaff, onRangeChange }: { onSelectStaff?: (s: StaffRow, range: LeaderboardRange) => void; onRangeChange?: (range: LeaderboardRange) => void }) {
   const { profile } = useAuth();
   const { selectedBranch } = useBranchContext();
-  const [staff, setStaff] = useState<StaffRow[]>([]);
-  const [activityCounts, setActivityCounts] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<FilterKey>('today');
   const [customDate, setCustomDate] = useState<Date | undefined>(new Date());
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
-    if (!profile || profile.role !== 'owner') return;
-    setLoading(true);
-    const { data: branches } = await db
+    if (!profile || profile.role !== 'owner') return { staff: [], activityCounts: {} };
+    const { data: branches, error: branchError } = await db
       .from('pharmacy_branches')
       .select('id')
       .eq('pharmacy_owner_id', profile.id);
     const branchIds = ((branches || []) as BranchRow[]).map((b) => b.id);
     const branchFilter = selectedBranch ? [selectedBranch] : branchIds;
-    const { data: people } = await db
+    const { data: people, error: peopleError } = await db
       .from('profiles')
       .select('id, full_name, branch_id')
       .eq('role', 'staff')
       .in('branch_id', branchFilter.length ? branchFilter : ['00000000-0000-0000-0000-000000000000']);
     const staffList = (people || []) as StaffRow[];
-    setStaff(staffList);
+    if (branchError || peopleError) throw branchError ?? peopleError;
 
     const staffIds = staffList.map((s) => s.id);
     if (staffIds.length === 0) {
-      setActivityCounts({});
-      setLoading(false);
-      return;
+      return { staff: staffList, activityCounts: {} };
     }
 
     // Use exact server-side counts for the same date range used by the drawer.
     // Fetching raw rows can silently stop at PostgREST's row limit, which made
     // recent activity appear as 0 while the staff detail drawer still had rows.
     const counts = await countActivitiesByStaff(staffIds, rangeForFilter(filter, customDate));
-    setActivityCounts(counts);
-    setLoading(false);
+    return { staff: staffList, activityCounts: counts };
   }, [profile, selectedBranch, filter, customDate]);
 
 
-  useEffect(() => { load(); }, [load]);
+  const range = rangeForFilter(filter, customDate);
+  const scope = `leaderboard:${JSON.stringify([selectedBranch, filter, range.from?.toISOString(), range.to?.toISOString()])}`;
+  const snapshot = useActivitySnapshot<{ staff: StaffRow[]; activityCounts: Record<string, number> }>(profile?.id, scope, { staff: [], activityCounts: {} }, load);
+  const { staff, activityCounts } = snapshot.data;
+  const { loading, setData } = snapshot;
 
   useEffect(() => {
-    if (!profile || profile.role !== 'owner' || staff.length === 0) return;
+    if (!profile || profile.role !== 'owner' || staff.length === 0 || snapshot.offline) return;
 
     const staffIds = new Set(staff.map((s) => s.id));
     const range = rangeForFilter(filter, customDate);
@@ -119,15 +118,14 @@ export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: Sta
         if (range.from && ts < range.from) return;
         if (range.to && ts >= range.to) return;
 
-        setActivityCounts((current) => ({
-          ...current,
-          [row.user_id!]: (current[row.user_id!] ?? 0) + 1,
-        }));
+        const staffId = row.user_id;
+        setData((current) => ({ ...current, activityCounts: { ...current.activityCounts,
+          [staffId]: (current.activityCounts[staffId] ?? 0) + 1 } }));
       })
       .subscribe();
 
     return () => { db.removeChannel(ch); };
-  }, [profile, staff, filter, customDate]);
+  }, [profile, staff, filter, customDate, snapshot.offline, setData]);
 
   const ranked = useMemo(() => {
     return staff
@@ -147,6 +145,8 @@ export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: Sta
     return { label: 'All Time' };
   }, [filter, customDate]);
 
+  useEffect(() => { onRangeChange?.(currentRange); }, [currentRange, onRangeChange]);
+  const pending = usePendingActivities([], currentRange);
   const subtitle = filter === 'custom' && customDate
     ? format(customDate, 'EEEE, MMM d, yyyy')
     : `Most active ${filterLabel(filter).toLowerCase()}`;
@@ -160,6 +160,7 @@ export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: Sta
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-4 md:p-6">
+        {snapshot.banner && <div role="status" className="mb-3 text-sm text-muted-foreground">{snapshot.banner}</div>}
         {/* Header */}
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="flex items-start gap-3">
@@ -174,13 +175,13 @@ export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: Sta
           <div className="flex items-center gap-2">
             <div className="text-right hidden sm:block">
               <div className="text-xs text-muted-foreground">Total actions</div>
-              <div className="text-lg font-semibold tabular-nums">{total}</div>
+              <div className="text-lg font-semibold tabular-nums">{snapshot.cacheMissing ? '—' : total}{pending.length > 0 && <span className="ml-2 text-xs text-muted-foreground">+{pending.length} pending</span>}</div>
             </div>
             <Button
               variant="outline"
               size="icon"
               className="h-8 w-8"
-              onClick={load}
+              onClick={snapshot.refetch}
               disabled={loading}
               aria-label="Refresh"
               title="Refresh"
@@ -255,7 +256,7 @@ export default function Leaderboard({ onSelectStaff }: { onSelectStaff?: (s: Sta
         <div className="mt-3 space-y-1">
           {loading && <div className="py-6 text-center text-sm text-muted-foreground">Loading…</div>}
           {!loading && ranked.length === 0 && (
-            <div className="py-6 text-center text-sm text-muted-foreground">No staff found.</div>
+            <div className="py-6 text-center text-sm text-muted-foreground">{snapshot.cacheMissing ? 'This date was not loaded before going offline.' : 'No staff found.'}</div>
           )}
           {!loading && ranked.length > 0 && ranked.every((r) => r.count === 0) && (
             <div className="py-6 text-center text-sm text-muted-foreground">No activity in this period.</div>

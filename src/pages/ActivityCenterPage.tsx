@@ -12,15 +12,23 @@ import ActivityRowItem from '@/components/activity/ActivityRowItem';
 import GoalProgressCard from '@/components/activity/GoalProgressCard';
 import GoalCompletionModal from '@/components/activity/GoalCompletionModal';
 import { cn } from '@/lib/utils';
+import { usePendingActivities } from '@/hooks/usePendingActivities';
+import { pendingActivityCounts } from '@/lib/offline/activity';
 
 export default function ActivityCenterPage() {
   const [date, setDate] = useState<Date>(new Date());
   const [celebrating, setCelebrating] = useState<StaffGoal | null>(null);
 
-  const { counts } = useActivityCounts();
-  const { myGoals, loading: goalsLoading } = useStaffGoals();
+  const { counts, cacheMissing: countsMissing } = useActivityCounts();
+  const { myGoals, cacheMissing: goalsMissing } = useStaffGoals();
   const goals = myGoals();
-  const { rows, loading } = useActivityFeed({ date });
+  const { rows: serverRows, loading, banner, cacheMissing } = useActivityFeed({ date });
+  const from = new Date(date); from.setHours(0, 0, 0, 0);
+  const to = new Date(from); to.setDate(to.getDate() + 1);
+  const pending = usePendingActivities(serverRows);
+  const pendingCounts = pendingActivityCounts(pending);
+  const rows = [...serverRows, ...pending.filter(row => +new Date(row.created_at) >= +from && +new Date(row.created_at) < +to)]
+    .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
 
   const grouped = useMemo(() => {
     const map = new Map<string, typeof rows>();
@@ -41,16 +49,17 @@ export default function ActivityCenterPage() {
         <p className="text-sm text-muted-foreground">Track everything you do across the system, in real time.</p>
       </div>
 
+      {banner && <div role="status" className="border border-border bg-muted/40 p-3 text-sm text-muted-foreground">{banner}</div>}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: 'Today',      value: counts.today },
-          { label: 'This Week',  value: counts.week },
-          { label: 'This Month', value: counts.month },
+          { label: 'Today',      value: counts.today, pending: pendingCounts.today },
+          { label: 'This Week',  value: counts.week, pending: pendingCounts.week },
+          { label: 'This Month', value: counts.month, pending: pendingCounts.month },
         ].map((s) => (
           <Card key={s.label}>
             <CardContent className="p-4">
               <div className="text-xs uppercase tracking-wide text-muted-foreground">{s.label}</div>
-              <div className="text-3xl font-bold tabular-nums mt-1">{s.value}</div>
+              <div className="flex flex-wrap items-baseline gap-2 mt-1"><span className="text-3xl font-bold tabular-nums">{countsMissing ? '—' : s.value}</span>{s.pending > 0 && <span className="text-xs text-muted-foreground">+{s.pending} pending</span>}</div>
             </CardContent>
           </Card>
         ))}
@@ -66,6 +75,7 @@ export default function ActivityCenterPage() {
           </div>
         </div>
       )}
+      {goalsMissing && <div className="text-sm text-muted-foreground">Goals were not loaded before going offline.</div>}
 
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Activity Log</h2>
@@ -85,7 +95,7 @@ export default function ActivityCenterPage() {
       {loading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
       ) : rows.length === 0 ? (
-        <Card><CardContent className="p-8 text-center text-muted-foreground">No activities on this date.</CardContent></Card>
+        <Card><CardContent className="p-8 text-center text-muted-foreground">{cacheMissing ? 'This date was not loaded before going offline.' : 'No activities on this date.'}</CardContent></Card>
       ) : (
         <div className="space-y-4">
           {grouped.map(([hour, items]) => (

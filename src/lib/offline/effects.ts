@@ -12,6 +12,7 @@ export async function saleEffects(record: LocalSale, result: RpcResult) {
         changeAmount: -5, reason: `New debt from sale (ETB ${unpaid.toFixed(2)} unpaid)`, createdBy: record.userId, branchId: record.branchId });
     } catch { /* Checkout is already confirmed; never retry it for a side effect. */ }
   }
+  if (record.payload.server_activity === true) return;
   void logActivity({ type: 'sell_item', entityType: 'sale', entityId: result.sale_id,
     metadata: { ...record.summary, payment_method: record.payload.payment_method,
       discount: record.payload.discount_amount, sale_date: record.payload.sale_date, client_txn_id: record.clientTxnId } });

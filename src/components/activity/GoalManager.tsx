@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useStaffGoals, type StaffGoal } from '@/hooks/useStaffGoals';
@@ -11,16 +11,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { useActivitySnapshot } from '@/hooks/useActivitySnapshot';
 
 interface StaffOption { id: string; full_name: string | null; branch_id: string | null }
 interface BranchOption { id: string; name: string }
 
 export default function GoalManager() {
   const { profile } = useAuth();
-  const { goals, assignments, create, remove, refetch } = useStaffGoals();
+  const { goals, assignments, create, remove, refetch, offline, banner, cacheMissing } = useStaffGoals();
   const [open, setOpen] = useState(false);
-  const [staff, setStaff] = useState<StaffOption[]>([]);
-  const [branches, setBranches] = useState<BranchOption[]>([]);
 
   const [form, setForm] = useState({
     name: '',
@@ -33,24 +32,26 @@ export default function GoalManager() {
     staff_ids: [] as string[],
   });
 
-  useEffect(() => {
-    if (!profile || profile.role !== 'owner') return;
-    (async () => {
-      const { data: br } = await (supabase as any)
+  const loadOptions = useCallback(async () => {
+    if (!profile || profile.role !== 'owner') return { branches: [], staff: [] };
+      const { data: br, error: branchError } = await (supabase as any)
         .from('pharmacy_branches')
         .select('id, name')
         .eq('pharmacy_owner_id', profile.id);
-      setBranches((br || []).map((b: any) => ({ id: b.id, name: b.name })));
+      if (branchError) throw branchError;
+      const branches = (br || []).map((b: any) => ({ id: b.id, name: b.name }));
       const branchIds = (br || []).map((b: any) => b.id);
-      if (branchIds.length === 0) return;
-      const { data: pe } = await (supabase as any)
+      if (branchIds.length === 0) return { branches, staff: [] };
+      const { data: pe, error: staffError } = await (supabase as any)
         .from('profiles')
         .select('id, full_name, branch_id')
         .eq('role', 'staff')
         .in('branch_id', branchIds);
-      setStaff((pe || []) as StaffOption[]);
-    })();
+      if (staffError) throw staffError;
+      return { branches, staff: (pe || []) as StaffOption[] };
   }, [profile]);
+  const options = useActivitySnapshot<{ branches: BranchOption[]; staff: StaffOption[] }>(profile?.id, 'goalOptions', { branches: [], staff: [] }, loadOptions);
+  const { branches, staff } = options.data;
 
   const submit = async () => {
     try {
@@ -102,16 +103,17 @@ export default function GoalManager() {
   return (
     <Card>
       <CardContent className="p-4 space-y-4">
+        {banner && <div role="status" className="text-sm text-muted-foreground">{banner}</div>}
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-semibold">Staff Goals</h3>
             <p className="text-xs text-muted-foreground">Create activity targets and motivate your team.</p>
           </div>
-          <Button size="sm" onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1" /> New Goal</Button>
+          <Button size="sm" disabled={offline} onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1" /> New Goal</Button>
         </div>
 
         <div className="space-y-2">
-          {goals.length === 0 && <div className="text-sm text-muted-foreground py-4 text-center">No goals yet. Create one to get started.</div>}
+          {goals.length === 0 && <div className="text-sm text-muted-foreground py-4 text-center">{cacheMissing ? 'Goals were not loaded before going offline.' : 'No goals yet. Create one to get started.'}</div>}
           {goals.map((g) => (
             <div key={g.id} className="flex items-center justify-between rounded-md border bg-card p-3">
               <div>
@@ -122,7 +124,7 @@ export default function GoalManager() {
                 </div>
                 <div className="text-xs text-muted-foreground">{describeAssignment(g)}</div>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => onDelete(g.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+              <Button variant="ghost" size="icon" disabled={offline} onClick={() => onDelete(g.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
             </div>
           ))}
         </div>
@@ -216,7 +218,7 @@ export default function GoalManager() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button onClick={submit}>Create Goal</Button>
+              <Button disabled={offline} onClick={submit}>Create Goal</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

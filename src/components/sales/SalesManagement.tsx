@@ -20,6 +20,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { addisDayString } from '@/lib/timezone';
 import { isMeasurable } from '@/lib/itemTypes';
 import { submitSale, UnknownOutcomeStorageError } from '@/lib/offline/submitSale';
+import { newSaleActivityFields } from '@/lib/offline/activity';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { acknowledgeWarning, needsProtectionWarning, NOT_PROTECTED_WARNING, offlineBlockReason, warningAcknowledged } from '@/lib/offline/storageGuard';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
@@ -641,7 +642,7 @@ export default function SalesManagement() {
       // Freeze unknown/rejected retry payloads so one ID never describes two sales.
       const payload: PosPayload = transactionRef.current?.payload ?? {
         client_txn_id: transactionRef.current?.id ?? crypto.randomUUID(), branch_id: branchId,
-        sale_date: saleDate, device_created_at: new Date().toISOString(), payment_method: paymentMethod,
+        sale_date: saleDate, ...newSaleActivityFields(), payment_method: paymentMethod,
         total_amount: Number(total.toFixed(2)), discount_amount: Number(calculateDiscount().toFixed(2)),
         amount_paid: actualPaid, change_action: finalChangeAction as PosPayload['change_action'], extra_profit: extraProfit,
         customer_id: offline || selectedCustomerId === 'none' ? null : selectedCustomerId,

@@ -8,6 +8,10 @@ After signing in online and caching an allowed branch catalog, the published app
 
 Finance, reports, attendance, purchasing, transfers, owner reconciliation and other modules remain online-only. A local sale is provisional: **Saved on device is not Confirmed by server**. On reconnect, the queue retries automatically, preserving transaction IDs. Needs-attention sales remain reserved until an authoritative resolution is visible to the cashier. Owners use `/sync-issues` online to retry, accept the charged price for PRICE_CHANGED only, or void with a required note. Resolved/voided history is read-only; quantities cannot be edited.
 
+Activity Center is also available offline as a read-only view of exactly what the signed-in user previously loaded. Feeds are cached by date/range, staff/branch scope and limit; counts, goals, goal progress and owner leaderboard views are cached separately in `meta` under `activity:<userId>:...`. No new Dexie table or schema version is required. Missing dates show “This date was not loaded before going offline”; saved views show their saved time. Offline goal editing/completion is disabled. Normal sign-out preserves these caches; explicit retirement removes only the current user's caches.
+
+New checkout payloads include `server_activity: true` and the device checkout timestamp. The existing server transaction creates the sale activity atomically and uniquely by transaction ID, retaining its device time subject to server clamping. Queued/restored legacy payloads are never amended; only unflagged, nonduplicate sales retain the existing client activity log. Credit-score behavior is unchanged. Pending, syncing, needs-attention and discarded activities are derived only from the signed-in user's local sales, selected by device timestamp (fallback: local creation time), and hidden when a loaded server activity has the same transaction ID. Synced/voided records are excluded. “+N pending” is separate from server counts and never advances goals. No separate activity queue exists.
+
 ## Device storage
 
 Dexie uses IndexedDB database `pharmaxpert-offline`:
@@ -117,6 +121,21 @@ Queued retries derive mode from the original payload: fully paid sales without d
 - [ ] Exercise blocked/private storage and cleared-site-data behavior without using real unexported sales.
 
 ## Automated checks and verification limits
+
+Offline Activity Center and atomic activity: full `bun test` suite passed **135 tests, 0 failures, 394 assertions across 12 files**. Tests cover new online/offline payload flags and timestamps, immutable legacy payloads, flagged/legacy/duplicate sale effects, unchanged credit penalty, private date-filtered pending statuses, transaction-ID de-duplication, separate period counts, user/date-scoped cache round trips and close/reopen persistence. No browser/device or authenticated server verification was performed.
+
+The initial test run had 132 passes and one failure caused by an incorrect expected text for the existing PRICE_CHANGED message; corrected to reuse `reasonMessage()` without changing production behavior. Failure output verbatim:
+```text
+error: expect(received).toEqual(expected)
+
+  [
+    "Pending sync",
+    "Syncing",
+-   "Needs attention: The price has changed. Refresh prices and try again.",
++   "Needs attention: The price has changed. Refresh the catalog and review the cart.",
+    "Discarded — not recorded",
+  ]
+```
 
 Shared-stock reservation fix: full `bun test` suite passed **119 tests, 0 failures, 352 assertions across 10 files**. Fake IndexedDB tests confirm a different cashier's 5 reserved units leave 7 of 12 available; pending/syncing/needs_attention reserve, discarded/synced/voided do not; another branch stays isolated; server catalog replacement after settlement does not double-subtract; private lists/export/backup remain user-scoped. No browser/device verification was performed.
 

@@ -32,8 +32,8 @@ export default function GoalProgressCard({ goal, onComplete }: Props) {
             </div>
           </div>
           <div className="text-right">
-            <div className="text-2xl font-bold tabular-nums">{p.count}<span className="text-sm text-muted-foreground"> / {p.target}</span></div>
-            <div className="text-xs text-muted-foreground">{p.percent}% complete</div>
+            <div className="text-2xl font-bold tabular-nums">{p.cacheMissing ? '—' : p.count}<span className="text-sm text-muted-foreground"> / {p.target}</span></div>
+            <div className="text-xs text-muted-foreground">{p.cacheMissing ? 'Progress not saved' : `${p.percent}% complete`}</div>
           </div>
         </div>
         <Progress value={Math.min(100, p.percent)} className={cn('h-2 transition-all duration-500', isDone && '[&>div]:bg-emerald-500')} />

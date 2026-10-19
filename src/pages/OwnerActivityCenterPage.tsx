@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ChevronDown } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
@@ -9,6 +9,8 @@ import GoalManager from '@/components/activity/GoalManager';
 import ActivityRowItem from '@/components/activity/ActivityRowItem';
 import { useActivityFeed } from '@/hooks/useActivityFeed';
 import { toast } from '@/hooks/use-toast';
+import { useOfflineStatus } from '@/lib/offline/store';
+import { usePendingActivities } from '@/hooks/usePendingActivities';
 
 interface StaffPick { id: string; full_name: string | null }
 
@@ -16,7 +18,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 
 function StaffActivityDrawer({ staff, range, onClose }: { staff: StaffPick | null; range: LeaderboardRange | null; onClose: () => void }) {
   const isAllTime = !range?.from && !range?.to;
-  const { rows, loading } = useActivityFeed({ userId: staff?.id, limit: isAllTime ? 1000 : 200, from: range?.from, to: range?.to });
+  const { rows, loading, banner, cacheMissing } = useActivityFeed({ userId: staff?.id, limit: isAllTime ? 1000 : 200, from: range?.from, to: range?.to });
 
   const grouped = (() => {
     if (!isAllTime) return null;
@@ -26,7 +28,8 @@ function StaffActivityDrawer({ staff, range, onClose }: { staff: StaffPick | nul
       const y = d.getFullYear();
       const m = d.getMonth();
       if (!byYear.has(y)) byYear.set(y, new Map());
-      const months = byYear.get(y)!;
+      const months = byYear.get(y);
+      if (!months) continue;
       if (!months.has(m)) months.set(m, [] as any);
       (months.get(m) as any).push(r);
     }
@@ -46,8 +49,9 @@ function StaffActivityDrawer({ staff, range, onClose }: { staff: StaffPick | nul
           <p className="text-xs text-muted-foreground">{range?.label || 'All Time'}</p>
         </SheetHeader>
         <div className="mt-4 space-y-2">
+          {banner && <div role="status" className="text-sm text-muted-foreground">{banner}</div>}
           {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
-          {!loading && rows.length === 0 && <div className="text-sm text-muted-foreground">No activity yet.</div>}
+          {!loading && rows.length === 0 && <div className="text-sm text-muted-foreground">{cacheMissing ? 'This date was not loaded before going offline.' : 'No activity yet.'}</div>}
           {!loading && !isAllTime && rows.map((r) => <ActivityRowItem key={r.id} row={r} />)}
           {!loading && isAllTime && grouped && grouped.map((y, yi) => (
             <Collapsible key={y.year} defaultOpen={yi === 0} className="space-y-2">
@@ -87,10 +91,18 @@ export default function OwnerActivityCenterPage() {
   const { profile } = useAuth();
   const [selected, setSelected] = useState<StaffPick | null>(null);
   const [selectedRange, setSelectedRange] = useState<LeaderboardRange | null>(null);
+  const { reachable } = useOfflineStatus();
+  const [pendingRange, setPendingRange] = useState<LeaderboardRange>(() => {
+    const from = new Date(); from.setHours(0, 0, 0, 0);
+    const to = new Date(from); to.setDate(to.getDate() + 1);
+    return { label: 'Today', from, to };
+  });
+  const onRangeChange = useCallback((range: LeaderboardRange) => setPendingRange(range), []);
+  const pending = usePendingActivities([], pendingRange);
 
   // Goal completion notifications
   useEffect(() => {
-    if (!profile || profile.role !== 'owner') return;
+    if (!profile || profile.role !== 'owner' || !reachable) return;
     const ch = (supabase as any)
       .channel(`owner-goal-completions-${profile.id}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'staff_goal_completions' }, async (payload: any) => {
@@ -108,7 +120,7 @@ export default function OwnerActivityCenterPage() {
       })
       .subscribe();
     return () => { (supabase as any).removeChannel(ch); };
-  }, [profile]);
+  }, [profile, reachable]);
 
   if (profile?.role !== 'owner') return <div className="p-6">Only owners can view this page.</div>;
 
@@ -119,7 +131,9 @@ export default function OwnerActivityCenterPage() {
         <p className="text-sm text-muted-foreground">Monitor your team's productivity in real time.</p>
       </div>
 
-      <Leaderboard onSelectStaff={(s, range) => { setSelected({ id: s.id, full_name: s.full_name }); setSelectedRange(range); }} />
+      <Leaderboard onRangeChange={onRangeChange} onSelectStaff={(s, range) => { setSelected({ id: s.id, full_name: s.full_name }); setSelectedRange(range); }} />
+
+      {pending.length > 0 && <div className="space-y-2"><h2 className="text-lg font-semibold">Your pending activity — {pendingRange.label}</h2>{pending.map(row => <ActivityRowItem key={row.id} row={row} />)}</div>}
 
       <GoalManager />
 

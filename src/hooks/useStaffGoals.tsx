@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
+import { useActivitySnapshot } from './useActivitySnapshot';
 
 export interface StaffGoal {
   id: string;
@@ -34,24 +35,19 @@ async function resolveOwnerId(profile: any): Promise<string | null> {
 
 export function useStaffGoals() {
   const { profile } = useAuth();
-  const [goals, setGoals] = useState<StaffGoal[]>([]);
-  const [assignments, setAssignments] = useState<GoalAssignment[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [ownerId, setOwnerId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!profile) return;
-    setLoading(true);
+    if (!profile) return { goals: [], assignments: [], ownerId: null };
     const oid = await resolveOwnerId(profile);
-    setOwnerId(oid);
-    const { data: g } = await (supabase as any).from('staff_goals').select('*').eq('active', true).order('created_at', { ascending: false });
-    const { data: a } = await (supabase as any).from('staff_goal_assignments').select('*');
-    setGoals((g || []) as StaffGoal[]);
-    setAssignments((a || []) as GoalAssignment[]);
-    setLoading(false);
+    const { data: g, error: ge } = await (supabase as any).from('staff_goals').select('*').eq('active', true).order('created_at', { ascending: false });
+    const { data: a, error: ae } = await (supabase as any).from('staff_goal_assignments').select('*');
+    if (ge || ae) throw ge ?? ae;
+    return { goals: (g || []) as StaffGoal[], assignments: (a || []) as GoalAssignment[], ownerId: oid };
   }, [profile]);
 
-  useEffect(() => { load(); }, [load]);
+  const snapshot = useActivitySnapshot<{ goals: StaffGoal[]; assignments: GoalAssignment[]; ownerId: string | null }>(profile?.id, 'goals', { goals: [], assignments: [], ownerId: null }, load);
+  const { goals, assignments, ownerId } = snapshot.data;
+  const { loading } = snapshot;
 
   const create = async (input: {
     name: string;
@@ -63,6 +59,7 @@ export function useStaffGoals() {
     branch_id?: string | null;
     staff_ids?: string[];
   }) => {
+    if (snapshot.offline) throw new Error('Connect to the internet to change goals.');
     if (!ownerId) throw new Error('Owner not resolved');
     const { data, error } = await (supabase as any).from('staff_goals').insert({
       owner_id: ownerId,
@@ -80,20 +77,22 @@ export function useStaffGoals() {
         input.staff_ids.map((sid) => ({ goal_id: (data as any).id, staff_id: sid }))
       );
     }
-    await load();
+    await snapshot.refetch();
     return data as StaffGoal;
   };
 
   const remove = async (id: string) => {
+    if (snapshot.offline) throw new Error('Connect to the internet to change goals.');
     const { error } = await (supabase as any).from('staff_goals').delete().eq('id', id);
     if (error) throw error;
-    await load();
+    await snapshot.refetch();
   };
 
   const setActive = async (id: string, active: boolean) => {
+    if (snapshot.offline) throw new Error('Connect to the internet to change goals.');
     const { error } = await (supabase as any).from('staff_goals').update({ active }).eq('id', id);
     if (error) throw error;
-    await load();
+    await snapshot.refetch();
   };
 
   /** Goals applicable to the current staff user. */
@@ -107,5 +106,5 @@ export function useStaffGoals() {
     });
   };
 
-  return { goals, assignments, loading, ownerId, create, remove, setActive, refetch: load, myGoals };
+  return { goals, assignments, loading, ownerId, create, remove, setActive, refetch: snapshot.refetch, myGoals, banner: snapshot.banner, cacheMissing: snapshot.cacheMissing, offline: snapshot.offline };
 }
