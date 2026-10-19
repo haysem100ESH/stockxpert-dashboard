@@ -1,9 +1,14 @@
 import 'fake-indexeddb/auto';
+import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
+import Dexie from 'dexie';
 import { beforeEach, afterAll, describe, expect, test } from 'bun:test';
-import { offlineDb } from './db';
-import { enqueueSale, settleSale } from './queue';
 import { sale } from './rules.test';
 import { availableStock } from './rules';
+
+Dexie.dependencies.indexedDB = indexedDB;
+Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+const { offlineDb } = await import('./db');
+const { enqueueSale, settleSale } = await import('./queue');
 
 beforeEach(async () => {
   await offlineDb.sales.clear(); await offlineDb.catalog.clear(); await offlineDb.meta.clear();
