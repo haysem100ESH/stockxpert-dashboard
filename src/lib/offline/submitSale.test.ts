@@ -15,7 +15,10 @@ mock.module('./network', () => ({ checkReachability: async () => reachable, vali
   callPos: async (payload: unknown, mode: string) => { calls.push({ payload, mode }); return response; } }));
 mock.module('./effects', () => ({ saleEffects: async (_sale: unknown, result: { duplicate?: boolean }) => { if (!result.duplicate) effectCount++; } }));
 mock.module('./catalog', () => ({ fetchCatalog: async () => [], replaceCatalog: async () => {} }));
-mock.module('./store', () => ({ signalSync: () => {} }));
+let storeState: Record<string, unknown> = {};
+let backupSignals = 0;
+mock.module('./store', () => ({ signalSync: () => {}, signalBackupNow: () => { backupSignals++; },
+  getOfflineState: () => storeState, setOfflineState: (patch: Record<string, unknown>) => { storeState = { ...storeState, ...patch }; } }));
 Object.assign(globalThis, { window: { dispatchEvent: () => true } });
 const { offlineDb } = await import('./db');
 const { submitSale } = await import('./submitSale');
