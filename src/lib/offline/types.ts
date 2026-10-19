@@ -1,7 +1,7 @@
 import type { SalesMedicine } from '@/hooks/useSalesInventory';
 import type { Packaging } from '@/lib/packaging';
 
-export type SaleStatus = 'pending' | 'syncing' | 'synced' | 'needs_attention' | 'voided';
+export type SaleStatus = 'pending' | 'syncing' | 'synced' | 'needs_attention' | 'voided' | 'discarded';
 export type Connection = 'online' | 'offline' | 'syncing' | 'needs_attention' | 'sign_in_required';
 export interface PosItem {
   branch_item_id: string;
@@ -56,6 +56,9 @@ export interface LocalSale {
   syncedAt?: string;
   nextAttemptAt?: number;
   creditScore?: number;
+  discardNote?: string;
+  discardedBy?: string;
+  discardedAt?: string;
 }
 export interface CatalogItem extends SalesMedicine {
   branchId: string;

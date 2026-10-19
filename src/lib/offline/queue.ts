@@ -29,7 +29,7 @@ export async function settleSale(record: LocalSale, result: RpcResult) {
   const now = new Date().toISOString();
   await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, async () => {
     const existing = await offlineDb.sales.get(record.clientTxnId);
-    if (existing?.status === 'synced' || existing?.status === 'voided') return;
+    if (existing?.status === 'synced' || existing?.status === 'voided' || existing?.status === 'discarded') return;
     if (result.status === 'synced') {
       // Move the reservation into the snapshot atomically until server refresh.
       for (const line of record.payload.items) {
@@ -40,7 +40,7 @@ export async function settleSale(record: LocalSale, result: RpcResult) {
       await offlineDb.meta.put({ key: `lastSuccessfulSync:${record.userId}`, value: now });
     } else {
       await offlineDb.sales.put({ ...record, status: result.status === 'voided' ? 'voided' : 'needs_attention',
-        reasonCode: result.reason_code, reasonDetail: result.reason_detail, issueId: result.issue_id,
+        reasonCode: result.reason_code, reasonDetail: result.reason_detail, issueId: result.status === 'rejected' ? undefined : result.issue_id,
         lastError: reasonMessage(result.reason_code, result.reason_detail), updatedAt: now });
     }
   });

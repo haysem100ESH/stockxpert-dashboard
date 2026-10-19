@@ -12,6 +12,12 @@ export class OfflineDatabase extends Dexie {
       sales: 'clientTxnId, status, branchId, userId, createdAt',
       meta: 'key',
     });
+    // Version 2 adds optional discard audit fields; keys and indexes are unchanged.
+    this.version(2).stores({
+      catalog: 'id, branchId, ownerKey',
+      sales: 'clientTxnId, status, branchId, userId, createdAt',
+      meta: 'key',
+    });
   }
 }
 export const offlineDb = new OfflineDatabase();
