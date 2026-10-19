@@ -1,10 +1,10 @@
 # Offline POS — part 1
 
 ## Sign-out retention
-- [ ] Preserve all device data on normal sign-out; clear authentication only
-- [ ] Update sign-out dialog and add separate export-gated retirement action
-- [ ] Resume same-user queue; show other-cashier count with stock isolation
-- [ ] Update docs and run full Bun suite (no browser/device verification)
+- [x] Preserve all device data on normal sign-out; clear authentication only
+- [x] Update sign-out dialog and add separate export-gated retirement action
+- [x] Resume same-user queue; show other-cashier count with stock isolation
+- [x] Update docs and run full Bun suite: 112 pass, 0 fail, 325 assertions (no browser/device verification)
 
 ## Review fixes
 - [x] Payload-derived retry mode and permanent-error classification
@@ -15,7 +15,7 @@
 ## Part 2
 - [x] Pending sales sheet, retry and token-free export
 - [x] Online owner reconciliation and sidebar count
-- [x] Export-gated sign-out and user cache cleanup
+- [x] Sign-out retention and separate export-gated retirement cleanup (supersedes export-gated sign-out)
 - [x] Recovery/decommissioning docs and acceptance checklist
 - [x] Rule tests and simulated browser verification
 

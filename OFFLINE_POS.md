@@ -118,6 +118,8 @@ Queued retries derive mode from the original payload: fully paid sales without d
 
 ## Automated checks and verification limits
 
+Sign-out retention checks: full `bun test` suite passed **112 tests, 0 failures, 325 assertions across 10 files**. Fake IndexedDB tests cover authentication-only online/offline sign-out, all-status sales/catalog/meta retention, session clearing, same-user interrupted queue recovery with unchanged payload, count-only other-cashier isolation, and current-export retirement gates. No browser/device or authenticated server verification was performed for this change.
+
 Run mock suites separately to isolate their mocked server modules:
 
 ```sh
