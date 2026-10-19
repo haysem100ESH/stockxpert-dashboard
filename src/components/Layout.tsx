@@ -22,6 +22,8 @@ import { useTheme } from 'next-themes';
 import { useAdvancedMode } from '@/hooks/useAdvancedMode';
 import { Switch } from '@/components/ui/switch';
 import { useOfflineSync } from '@/hooks/useOfflineSync';
+import { useOfflineBackup } from '@/hooks/useOfflineBackup';
+import StorageBackupIndicators from '@/components/sales/StorageBackupIndicators';
 import { useOfflineStatus } from '@/lib/offline/store';
 import OfflineStatusBadge from '@/components/sales/OfflineStatusBadge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -34,6 +36,7 @@ export default function Layout({ children }: LayoutProps) {
   const { user, profile, signOut, loading } = useAuth();
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   useOfflineSync();
+  useOfflineBackup();
   const { reachable } = useOfflineStatus();
   const location = useLocation();
 
@@ -144,6 +147,7 @@ function LayoutHeader({ profile, user, onSignOut }: { profile: any, user: any, o
       <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-4">
         <SidebarTrigger className="ml-0" />
         <OfflineStatusBadge />
+        <StorageBackupIndicators />
         
         {/* Branch Selector for Owners */}
         {profile?.role === 'owner' && (

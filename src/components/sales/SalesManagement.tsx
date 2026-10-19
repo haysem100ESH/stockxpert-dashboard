@@ -21,6 +21,8 @@ import { addisDayString } from '@/lib/timezone';
 import { isMeasurable } from '@/lib/itemTypes';
 import { submitSale, UnknownOutcomeStorageError } from '@/lib/offline/submitSale';
 import { useOfflineStatus } from '@/lib/offline/store';
+import { acknowledgeWarning, needsProtectionWarning, NOT_PROTECTED_WARNING, offlineBlockReason, warningAcknowledged } from '@/lib/offline/storageGuard';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import type { PosPayload } from '@/lib/offline/types';
 import { useReadOnly } from '@/hooks/useReadOnly';
 
@@ -73,7 +75,8 @@ type ChangeAction = 'keep_profit' | 'deduct_debt' | 'give_change' | null;
 export default function SalesManagement() {
   // TanStack Query–cached product list + customers (instant hydration on revisit).
   const { medicines, customers, loading, packagingMap, cachedAt, catalogError, invalidate: invalidateSalesCache } = useSalesInventory();
-  const { reachable, storageError } = useOfflineStatus();
+  const { reachable, storageError, storage } = useOfflineStatus();
+  const [storageWarningOpen, setStorageWarningOpen] = useState(false);
   const offline = !reachable;
   const transactionRef = useRef<{ id: string; payload?: PosPayload } | null>(null);
   const checkoutBusy = useRef(false);
@@ -1055,9 +1058,28 @@ export default function SalesManagement() {
         onOpenChange={setShowCheckoutConfirm}
         title="Confirm Checkout"
         description={`${offline ? 'Save on this device? This is not confirmation by the server.' : 'Send to the server? If confirmation is unavailable, this sale will be saved on this device for retry.'} Total: ETB ${total.toFixed(2)} via ${paymentMethod}`}
-        onConfirm={confirmCheckout}
+        onConfirm={() => {
+          if (offline) {
+            const blocked = offlineBlockReason(storage, storageError);
+            if (blocked) { setShowCheckoutConfirm(false); toast({ title: 'Offline sale blocked', description: blocked, variant: 'destructive' }); return; }
+            if (needsProtectionWarning(storage) && !warningAcknowledged()) { setShowCheckoutConfirm(false); setStorageWarningOpen(true); return; }
+          }
+          void confirmCheckout();
+        }}
         confirmText={offline ? 'Save on device' : 'Confirm sale'}
       />
+      <AlertDialog open={storageWarningOpen} onOpenChange={setStorageWarningOpen}>
+        <AlertDialogContent className="border-destructive">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-destructive">Offline data is not protected</AlertDialogTitle>
+            <AlertDialogDescription className="text-destructive">{NOT_PROTECTED_WARNING}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { acknowledgeWarning(); void confirmCheckout(); }}>I understand — save on device</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
