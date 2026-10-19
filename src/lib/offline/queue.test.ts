@@ -11,6 +11,7 @@ const { offlineDb } = await import('./db');
 const { enqueueSale, settleSale } = await import('./queue');
 
 beforeEach(async () => {
+  await offlineDb.open();
   await offlineDb.sales.clear(); await offlineDb.catalog.clear(); await offlineDb.meta.clear();
   await offlineDb.meta.put({ key: 'branches:user', value: ['branch'] });
   await offlineDb.catalog.put({ id: 'item', medicine_id: 'med', name: 'Medicine', branchId: 'branch', branch_id: 'branch', ownerKey: 'user',
