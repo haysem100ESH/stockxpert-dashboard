@@ -17,11 +17,9 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import CartSlider from './CartSlider';
 import AddToCartDialog from './AddToCartDialog';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { updateCreditScore } from '@/hooks/useCreditScore';
 import { addisDayString } from '@/lib/timezone';
 import { isMeasurable } from '@/lib/itemTypes';
-import { logActivity } from '@/lib/activityLog';
-import { submitSale } from '@/lib/offline/submitSale';
+import { submitSale, UnknownOutcomeStorageError } from '@/lib/offline/submitSale';
 import { useOfflineStatus } from '@/lib/offline/store';
 import type { PosPayload } from '@/lib/offline/types';
 import { useReadOnly } from '@/hooks/useReadOnly';
@@ -679,7 +677,7 @@ export default function SalesManagement() {
       if (result.status === 'synced') window.dispatchEvent(new Event('app:refresh'));
     } catch (error: any) {
       console.error('[Checkout Error]', error);
-      if (transactionRef.current) transactionRef.current.payload = undefined;
+      if (transactionRef.current && !(error instanceof UnknownOutcomeStorageError)) transactionRef.current.payload = undefined;
       toast({
         title: 'Payment Failed',
         description: error instanceof Error ? error.message : 'Could not confirm this sale. Your cart has been kept.',

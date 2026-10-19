@@ -159,6 +159,7 @@ export function useSalesInventory() {
   useEffect(() => {
     setLocalLoading(true);
     setLocalRows([]);
+    setCachedAt(undefined);
     if (!profile || !branchIds.length) { setLocalLoading(false); return; }
     const sub = liveQuery(async () => ({
       rows: await offlineDb.catalog.where('ownerKey').equals(profile.id).and(row => branchIds.includes(row.branchId)).toArray(),
@@ -185,9 +186,7 @@ export function useSalesInventory() {
     if (!enabled || !reachable) return;
     void refresh();
     const interval = setInterval(() => { void refresh(); }, 10 * 60 * 1000);
-    const handler = () => { void refresh(); };
-    window.addEventListener('app:refresh', handler);
-    return () => { clearInterval(interval); window.removeEventListener('app:refresh', handler); };
+    return () => { clearInterval(interval); };
   }, [enabled, reachable, refresh]);
   const medicines = useMemo(() => localRows.map(row => ({ ...row,
     stock_quantity: availableStock(row.serverAvailable, row.id, reservations),
@@ -208,6 +207,7 @@ export function useSalesInventory() {
   // list updates immediately rather than waiting for the next focus event.
   useEffect(() => {
     const handler = () => {
+      if (!reachable) return;
       void refresh();
       queryClient.refetchQueries({ queryKey: ['sales-customers'] });
       queryClient.refetchQueries({ queryKey: ['branch-inventory'] });

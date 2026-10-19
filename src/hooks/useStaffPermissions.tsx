@@ -105,7 +105,7 @@ export function StaffPermissionsProvider({ children }: { children: ReactNode }) 
 
       if (error) {
         console.error('Failed to fetch staff permissions:', error);
-        // Default to edit on error for backward compatibility
+        // Cached verified permissions only; uncached offline access is denied.
         await fallback();
         setLoading(false);
         return;

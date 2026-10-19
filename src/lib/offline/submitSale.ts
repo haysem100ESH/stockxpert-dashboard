@@ -8,6 +8,8 @@ import { fetchCatalog, replaceCatalog } from './catalog';
 import { signalSync } from './store';
 
 export type SubmitResult = { status: 'synced' | 'saved'; message?: string; saleId?: string };
+export class UnknownOutcomeStorageError extends Error {}
+export class SaleRejectedError extends Error {}
 export async function submitSale(payload: PosPayload, userId: string, summary: SaleSummary, creditScore?: number): Promise<SubmitResult> {
   return withPosLock(async () => {
     const existing = await offlineDb.sales.get(payload.client_txn_id);
@@ -34,13 +36,14 @@ export async function submitSale(payload: PosPayload, userId: string, summary: S
       result = data as RpcResult;
     } catch (error) {
       // The server may already have committed. Persist the SAME payload/id.
-      await enqueueSale({ ...record, lastError: error instanceof Error ? error.message : 'Could not confirm server outcome' }, false);
+      try { await enqueueSale({ ...record, lastError: error instanceof Error ? error.message : 'Could not confirm server outcome' }, false); }
+      catch { throw new UnknownOutcomeStorageError('The server outcome is unknown and this device could not save a retry. Keep this cart unchanged and retry; do not enter this sale again.'); }
       signalSync();
       return { status: 'saved', message: hasCredit(payload)
         ? 'Could not confirm credit sale — it will be retried; do not re-enter it'
         : 'Saved on this device — will sync automatically' };
     }
-    if (result.status === 'rejected') throw new Error(reasonMessage(result.reason_code, result.reason_detail));
+    if (result.status === 'rejected') throw new SaleRejectedError(reasonMessage(result.reason_code, result.reason_detail));
     if (result.status !== 'synced') {
       await settleSale(record, result);
       signalSync();

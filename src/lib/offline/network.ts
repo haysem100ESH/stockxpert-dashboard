@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/db';
-import { setOfflineState } from './store';
+import { getOfflineState, setOfflineState } from './store';
 
 export async function checkReachability(): Promise<boolean> {
   if (!navigator.onLine) { setOfflineState({ reachable: false, connection: 'offline' }); return false; }
@@ -9,7 +9,8 @@ export async function checkReachability(): Promise<boolean> {
     const { error } = await supabase.from('pharmacy_branches').select('id').limit(1).abortSignal(controller.signal);
     // Auth errors prove reachability; session validation handles them separately.
     const reachable = !error || error.code === 'PGRST301' || error.code === 'PGRST303' || error.code === '42501';
-    setOfflineState({ reachable, connection: reachable ? 'online' : 'offline' });
+    const current = getOfflineState();
+    setOfflineState({ reachable, connection: !reachable ? 'offline' : current.connection === 'sign_in_required' || current.connection === 'syncing' ? current.connection : current.needsAttentionCount ? 'needs_attention' : 'online' });
     return reachable;
   } catch { setOfflineState({ reachable: false, connection: 'offline' }); return false; }
   finally { clearTimeout(timer); }
@@ -22,6 +23,7 @@ export async function validSession(userId: string): Promise<boolean> {
       const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
       if (refreshError || refreshed.session?.user.id !== userId) throw new Error('Sign in required');
     }
+    if (getOfflineState().connection === 'sign_in_required') setOfflineState({ connection: getOfflineState().needsAttentionCount ? 'needs_attention' : 'online' });
     return true;
   } catch { setOfflineState({ connection: 'sign_in_required' }); return false; }
 }
