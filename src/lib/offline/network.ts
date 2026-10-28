@@ -1,10 +1,12 @@
 import { supabase } from '@/lib/db';
 import { getOfflineState, setOfflineState } from './store';
+import { bypassReadCache } from './readCache';
 
 export async function checkReachability(): Promise<boolean> {
   if (!navigator.onLine) { setOfflineState({ reachable: false, connection: 'offline' }); return false; }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
+  bypassReadCache(controller.signal);
   try {
     const { error } = await supabase.from('pharmacy_branches').select('id').limit(1).abortSignal(controller.signal);
     // Auth errors prove reachability; session validation handles them separately.
