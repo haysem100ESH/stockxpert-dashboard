@@ -14,6 +14,7 @@ mock.module('@/hooks/useBranchContext', () => ({ useBranchContext: () => ({ sele
 mock.module('@/hooks/useStaffPermissions', () => ({ useStaffPermissions: () => ({ getPermission: () => edit ? 'edit' : 'read', loading: false, uncachedOffline: false }) }));
 mock.module('@/hooks/use-toast', () => ({ useToast: () => ({ toast: (value: unknown) => notifications.push(value) }), toast: () => {} }));
 mock.module('@/lib/db', () => ({ supabase: { from: () => { backendWrites++; throw new Error('Offline forms must not write to server'); } } }));
+mock.module('@/integrations/supabase/client', () => ({ supabase: {} }));
 mock.module('@/lib/offline/network', () => ({ checkReachability: async () => false, withPosLock: (work: () => Promise<unknown>) => new Promise((resolve, reject) => setTimeout(() => { work().then(resolve, reject); }, 0)) }));
 const React = await import('react'); const { act } = React;
 const { createRoot } = await import('react-dom/client'); const { MemoryRouter } = await import('react-router-dom');
