@@ -4,12 +4,15 @@ import { supabase } from '@/lib/db';
 import { cacheMeta, readMeta } from '@/lib/offline/db';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { useAuth } from '@/hooks/useAuth';
+import { loadOfflineBranches } from '@/lib/offline/gates';
 
 interface Branch {
   id: string;
   name: string;
   is_main_branch: boolean;
   branch_type: string;
+  /** Offline only: false when this branch was never opened on this PC. */
+  available?: boolean;
 }
 
 interface BranchSelectorProps {
@@ -21,13 +24,18 @@ interface BranchSelectorProps {
 export default function BranchSelector({ selectedBranch, onBranchChange, showAllOption = true }: BranchSelectorProps) {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
+  const [allAvailable, setAllAvailable] = useState(true);
   const { profile } = useAuth();
   const { reachable } = useOfflineStatus();
 
   const fetchBranches = useCallback(async () => {
     if (!profile) { setBranches([]); setLoading(false); return; }
     try {
-      if (!reachable) { setBranches(await readMeta<Branch[]>(`branchDetails:${profile.id}`) ?? []); return; }
+      if (!reachable) {
+        const offline = await loadOfflineBranches(profile.id);
+        setBranches(offline.branches); setAllAvailable(offline.allAvailable); return;
+      }
+      setAllAvailable(true);
       let query = supabase
         .from('pharmacy_branches')
         .select('id, name, is_main_branch, branch_type')
@@ -92,11 +100,11 @@ export default function BranchSelector({ selectedBranch, onBranchChange, showAll
       </SelectTrigger>
       <SelectContent>
         {showAllOption && (
-          <SelectItem value="all">All Branches</SelectItem>
+          <SelectItem value="all" disabled={!reachable && !allAvailable && selectedBranch !== null}>All Branches{!reachable && !allAvailable ? ' — Not available offline' : ''}</SelectItem>
         )}
         {branches.map((branch) => (
-          <SelectItem key={branch.id} value={branch.id}>
-            {branch.branch_type === 'pharmacy' ? '💊' : '📦'} {branch.name} {branch.is_main_branch && '(Main)'}
+          <SelectItem key={branch.id} value={branch.id} disabled={!reachable && branch.available === false && branch.id !== selectedBranch}>
+            {branch.branch_type === 'pharmacy' ? '💊' : '📦'} {branch.name} {branch.is_main_branch && '(Main)'}{!reachable && branch.available === false ? ' — Not available offline' : ''}
           </SelectItem>
         ))}
       </SelectContent>
