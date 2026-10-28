@@ -53,7 +53,7 @@ export async function restoreBackup(doc: BackupDocument, userId: string): Promis
     for (const op of doc.ops ?? []) {
       if (!validOpRecord(op, userId)) { result.invalid++; continue; }
       if (await offlineDb.ops.get(op.opId)) { result.present++; continue; }
-      await offlineDb.ops.add({ ...exportOp(op), status: op.status === 'synced' || op.status === 'discarded' ? op.status : op.serverIssue ? 'needs_attention' : 'pending',
+      await offlineDb.ops.add({ ...exportOp(op), status: op.status === 'syncing' ? 'pending' : op.status,
         attempts: 0, nextAttemptAt: Date.now(), updatedAt: now });
       result.restored++;
     }
@@ -68,6 +68,8 @@ export function validOpRecord(value: unknown, userId: string): value is LocalOp 
   return !!fields && o.userId === userId && typeof o.opId === 'string' && !!o.opId && typeof o.entityId === 'string' && !!o.entityId
     && typeof o.branchId === 'string' && !!o.branchId && (o.opType === `${o.entityType}.create` || o.opType === `${o.entityType}.update`)
     && !!o.payload && typeof o.payload === 'object' && Object.entries(o.payload).every(([k, v]) => fields.includes(k) && (v === null || typeof v === 'string'))
+    && (o.prevOpId === undefined || (typeof o.prevOpId === 'string' && !!o.prevOpId && o.prevOpId !== o.opId))
+    && (o.baseUpdatedAt === undefined || typeof o.baseUpdatedAt === 'string')
     && typeof o.status === 'string' && ['pending', 'syncing', 'synced', 'needs_attention', 'discarded'].includes(o.status)
     && typeof o.deviceCreatedAt === 'string' && Number.isFinite(Date.parse(o.deviceCreatedAt));
 }

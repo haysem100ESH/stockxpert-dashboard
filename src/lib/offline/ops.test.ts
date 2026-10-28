@@ -164,3 +164,10 @@ test('backup and export retain synced chain ancestors so restored edits are send
   let sent = 0; await syncOp(restored, { call: async () => { sent++; return { data: { status: 'applied' }, error: null }; }, sessionValid: async () => true });
   expect(sent).toBe(1);
 });
+test('duplicate owner void settles without retry; restored local refusals stay review-only', async () => {
+  const op = await create(); await syncOp(op, reply({ status: 'voided', duplicate: true, resolution_note: 'Reviewed by owner' }));
+  expect(await offlineDb.ops.get(op.opId)).toMatchObject({ status: 'discarded', ownerVoided: true, discardNote: 'Reviewed by owner' });
+  const local: LocalOp = { ...op, opId: 'refused', status: 'needs_attention', serverIssue: false, reasonCode: 'INVALID_INPUT' };
+  const doc = buildBackupDocument([], 'user', 'device', new Date(), [local]); await restoreBackup(doc, 'user');
+  expect((await offlineDb.ops.get('refused'))?.status).toBe('needs_attention');
+});

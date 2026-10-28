@@ -17,6 +17,7 @@ export function useOfflineRecordForm(entity: EntityType) {
   const offlineAllowed = !reachable && canEdit;
   const identity = useRef<{ userId: string; opId: string; entityId: string }>();
   const save = async (values: Record<string, unknown>, previous?: { id: string } & Record<string, unknown>) => {
+    if (!canEdit) throw new Error('You do not have cached edit permission for this page.');
     const branchId = typeof previous?.branch_id === 'string' ? previous.branch_id : selectedBranch || profile?.branch_id;
     if (!user || !branchId) throw new Error('Select a specific branch before saving offline.');
     const warning = await duplicateWarning(user.id, entity, values, previous?.id);

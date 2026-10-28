@@ -41,7 +41,7 @@ export async function syncOp(op: LocalOp, deps = {
   let result: OpResult;
   try {
     const { data, error } = await deps.call(opRequest(op)); if (error) throw error;
-    if (!data || typeof data !== 'object' || !('status' in data) || !['applied', 'needs_attention', 'rejected'].includes(String(data.status))) throw new Error('Unknown server outcome');
+    if (!data || typeof data !== 'object' || !('status' in data) || !['applied', 'needs_attention', 'rejected', 'voided'].includes(String(data.status))) throw new Error('Unknown server outcome');
     result = data as OpResult;
   } catch (error) {
     const attempts = op.attempts + 1; const permanent = await isPermanentPosError(error, deps.sessionValid);
