@@ -18,6 +18,9 @@ import { liveQuery } from 'dexie';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { branchReservations } from '@/lib/offline/queue';
 import { applyReservations } from '@/lib/offline/rules';
+import { offlineDb } from '@/lib/offline/db';
+import { stockOnDevice } from '@/lib/offline/stock';
+import type { LocalOp } from '@/lib/offline/opTypes';
 import type { LocalSale } from '@/lib/offline/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/db';
@@ -237,23 +240,25 @@ export function useBranchInventory() {
   // Offline: subtract unsynced sales of every cashier on this PC (shared Sales reservation rule).
   const { reachable } = useOfflineStatus();
   const [reservations, setReservations] = useState<LocalSale[]>([]);
+  const [stockOps, setStockOps] = useState<LocalOp[]>([]);
   const reservationScope = branchIds.join(',');
   useEffect(() => {
-    if (reachable || !branchIds.length) { setReservations([]); return; }
-    const sub = liveQuery(() => branchReservations(branchIds)).subscribe({ next: setReservations, error: () => setReservations([]) });
+    if (reachable || !branchIds.length) { setReservations([]); setStockOps([]); return; }
+    const sub = liveQuery(async () => ({ sales: await branchReservations(branchIds), ops: await offlineDb.ops.where('branchId').anyOf(branchIds).toArray() }))
+      .subscribe({ next: ({ sales, ops }) => { setReservations(sales); setStockOps(ops); }, error: () => { setReservations([]); setStockOps([]); } });
     return () => sub.unsubscribe();
   }, [reachable, reservationScope]);
 
   const items = useMemo(() => {
     const raw = query.data ?? [];
-    const base = !reachable && reservations.length ? applyReservations(raw as Array<EnrichedBranchItem & { quantity: number }>, reservations) : raw;
+    const base = !reachable ? raw.map(item => ({ ...item, quantity: stockOnDevice(Number(item.quantity), item.id, item.branch_id, stockOps, reservations) })) : raw;
     const ingMap = ingredientsQuery.data;
     if (!ingMap) return base;
     return base.map((it) => ({
       ...it,
       active_ingredients: ingMap[(it as any).medicine_id] || [],
     }));
-  }, [query.data, ingredientsQuery.data, reachable, reservations]);
+  }, [query.data, ingredientsQuery.data, reachable, reservations, stockOps]);
 
   useEffect(() => {
     const handler = () => queryClient.refetchQueries({ queryKey: ['branch-inventory'] });

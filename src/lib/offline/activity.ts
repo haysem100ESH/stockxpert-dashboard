@@ -64,7 +64,8 @@ export function pendingOpActivityRows(ops: LocalOp[], userId: string, serverRows
     if (op.userId !== userId || !badge || op.ownerVoided || recorded.has(op.opId) || !Number.isFinite(stamp)
       || (range.from && stamp < +range.from) || (range.to && stamp >= +range.to)) return [];
     return [{ id: `local-op:${op.opId}`, user_id: userId, owner_id: userId, branch_id: op.branchId,
-      activity_type: `${op.opType.endsWith('.create') ? 'create' : 'edit'}_${op.entityType}`, entity_type: op.entityType,
+      activity_type: op.opType === 'stock.receive' ? 'receive_stock' : op.opType === 'stock.adjust' ? 'adjust_stock' : `${op.opType.endsWith('.create') ? 'create' : 'edit'}_${op.entityType}`,
+      entity_type: op.opType === 'stock.receive' ? 'batch' : op.opType === 'stock.adjust' ? 'branch_item' : op.entityType,
       entity_id: op.entityId, previous_value: null, new_value: op.payload, metadata: { ...op.payload, op_id: op.opId },
       created_at: op.deviceCreatedAt, client_txn_id: op.opId, pendingBadge: badge }];
   });

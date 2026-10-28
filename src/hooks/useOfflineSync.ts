@@ -76,6 +76,9 @@ export function useOfflineSync() {
             if (!error && data && ['applied', 'voided'].includes(data.status)) {
               await settleOp(op, { ...data, updated_at: data.result?.updated_at ?? data.updated_at,
                 resolution_note: data.resolution_note ?? data.result?.resolution_note } as OpResult);
+              if (data.status === 'applied' && op.entityType === 'stock') {
+                try { const rows = await fetchCatalog([op.branchId], userId); await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([op.branchId], userId, rows)); } catch { /* Keep settled snapshot. */ }
+              }
               queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh'));
             }
           }
@@ -91,7 +94,12 @@ export function useOfflineSync() {
               if (!op || op.userId !== userId) continue;
               setOfflineState({ connection: 'syncing' });
               const result = await syncOp(op);
-              if (result?.status === 'applied') { queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh')); }
+              if (result?.status === 'applied') {
+                if (op.entityType === 'stock') {
+                  try { const rows = await fetchCatalog([op.branchId], userId); await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([op.branchId], userId, rows)); } catch { /* Keep settled snapshot. */ }
+                }
+                queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh'));
+              }
               if (!result && (await offlineDb.ops.get(op.opId))?.status === 'pending' && !await dependencyReady(op)) continue;
               if (!result && (await offlineDb.ops.get(op.opId))?.status === 'pending') break;
               continue;

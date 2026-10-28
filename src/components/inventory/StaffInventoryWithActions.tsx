@@ -28,6 +28,8 @@ import StockAdjustmentDialog from './StockAdjustmentDialog';
 import ImportCsvDialog from './ImportCsvDialog';
 import { formatMedicineName, formatPackaging } from '@/lib/medicineDisplay';
 import { formatStock } from '@/lib/packaging';
+import { canEnqueueOp } from '@/lib/offline/ops';
+import { liveQuery } from 'dexie';
 
 const ITEMS_PER_PAGE = 24;
 
@@ -56,6 +58,8 @@ export default function StaffInventoryWithActions() {
   const [hasBranches, setHasBranches] = useState(true);
   const [batchBreakdown, setBatchBreakdown] = useState<{ open: boolean; itemId: string; itemName: string }>({ open: false, itemId: '', itemName: '' });
   const [adjustingItem, setAdjustingItem] = useState<BranchItem | null>(null);
+  const [offlineStockMode, setOfflineStockMode] = useState<'receive' | 'adjust'>('adjust');
+  const [stockBranches, setStockBranches] = useState<string[]>([]);
   const [infoItem, setInfoItem] = useState<{ branchItemId: string; medicineId?: string; name: string } | null>(null);
   const { toast } = useToast();
   const { profile } = useAuth();
@@ -227,6 +231,13 @@ export default function StaffInventoryWithActions() {
   const getUniqueGroups = () => uniqueGroups;
 
   const { reachable: isReachable } = useOfflineStatus();
+  useEffect(() => {
+    if (isReachable || !profile) { setStockBranches([]); return; }
+    const ids = [...new Set(branchItems.map(i => i.branch_id))];
+    const sub = liveQuery(async () => (await Promise.all(ids.map(async id => await canEnqueueOp(profile.id, 'stock', id) ? id : undefined))).filter((id): id is string => !!id))
+      .subscribe({ next: setStockBranches, error: () => setStockBranches([]) });
+    return () => sub.unsubscribe();
+  }, [isReachable, profile?.id, branchItems.map(i => i.branch_id).join(',')]);
   const addisToday = useAddisToday();
   const isExpired = (item: BranchItem) => {
     // Offline: recompute on the device daily using the Addis Ababa date.
@@ -272,7 +283,10 @@ export default function StaffInventoryWithActions() {
           <div className="flex space-x-1">
             <Button size="sm" variant="ghost" onClick={() => setInfoItem({ branchItemId: item.id, medicineId: (item as any).medicine_id, name: item.name })} title="Info"><Info className="h-4 w-4" /></Button>
             <Button size="sm" variant="ghost" onClick={() => setBatchBreakdown({ open: true, itemId: item.id, itemName: item.name })} title="View Batches"><Layers className="h-4 w-4" /></Button>
-            {!readOnly && <Button size="sm" variant="ghost" onClick={() => setAdjustingItem(item)} title="Adjust Stock"><PackagePlus className="h-4 w-4" /></Button>}
+            {!readOnly && (isReachable ? <Button size="sm" variant="ghost" onClick={() => setAdjustingItem(item)} title="Adjust Stock"><PackagePlus className="h-4 w-4" /></Button> : <span data-offline-allow className="flex gap-1">
+              <Button size="sm" variant="ghost" disabled={!stockBranches.includes(item.branch_id)} title="Receive stock" aria-label="Receive stock" onClick={() => { setOfflineStockMode('receive'); setAdjustingItem(item); }}><PackagePlus className="h-4 w-4" /></Button>
+              <Button size="sm" variant="ghost" disabled={!stockBranches.includes(item.branch_id)} title="Adjust stock" aria-label="Adjust stock" onClick={() => { setOfflineStockMode('adjust'); setAdjustingItem(item); }}><SlidersHorizontal className="h-4 w-4" /></Button>
+            </span>)}
             {!readOnly && <Button size="sm" variant="ghost" onClick={() => handleEditItem(item)} title="Edit"><Edit2 className="h-4 w-4" /></Button>}
             {!readOnly && <Button size="sm" variant="ghost" onClick={() => handleDeleteItem(item.id, item.name)} title="Remove"><Trash2 className="h-4 w-4" /></Button>}
           </div>

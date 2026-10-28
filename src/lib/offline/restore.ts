@@ -4,6 +4,7 @@ import { withPosLock } from './network';
 import { BACKUP_FORMAT, BACKUP_VERSION, type BackupDocument } from './backup';
 import type { ExportedSale } from './deviceSafety';
 import type { LocalSale } from './types';
+import { stockPayload, RECEIVE_FIELDS, ADJUST_FIELDS } from './stock';
 
 export const OTHER_CASHIER = 'This backup belongs to another cashier. That cashier must sign in on this PC to restore it.';
 export interface RestorePreview { count: number; records?: number; from?: string; to?: string; total: number; statuses: Record<string, number> }
@@ -65,9 +66,17 @@ export function validOpRecord(value: unknown, userId: string): value is LocalOp 
   if (!value || typeof value !== 'object') return false;
   const o = value as Partial<LocalOp>;
   const fields = o.entityType && OP_FIELDS[o.entityType];
+  const stock = o.opType === 'stock.receive' || o.opType === 'stock.adjust';
+  if (stock) {
+    if (o.entityType !== 'stock' || !o.payload || !o.stockItemId || (o.opType === 'stock.adjust' && o.entityId !== (o.payload.batch_id ?? o.payload.branch_item_id))) return false;
+    const allowed = o.opType === 'stock.receive' ? RECEIVE_FIELDS : ADJUST_FIELDS;
+    if (Object.keys(o.payload).some(k => !(allowed as readonly string[]).includes(k))) return false;
+    try { stockPayload(o.opType, o.payload, '0000-00-00'); } catch { return false; }
+  }
+  if (o.dependsOn !== undefined && (!Array.isArray(o.dependsOn) || new Set(o.dependsOn).size !== o.dependsOn.length || o.dependsOn.some(id => typeof id !== 'string' || !id || id === o.opId))) return false;
   return !!fields && o.userId === userId && typeof o.opId === 'string' && !!o.opId && typeof o.entityId === 'string' && !!o.entityId
-    && typeof o.branchId === 'string' && !!o.branchId && (o.opType === `${o.entityType}.create` || o.opType === `${o.entityType}.update`)
-    && !!o.payload && typeof o.payload === 'object' && Object.entries(o.payload).every(([k, v]) => fields.includes(k) && (v === null || typeof v === 'string'))
+    && typeof o.branchId === 'string' && !!o.branchId && (stock || o.opType === `${o.entityType}.create` || o.opType === `${o.entityType}.update`)
+    && !!o.payload && typeof o.payload === 'object' && (stock || Object.entries(o.payload).every(([k, v]) => fields.includes(k) && (v === null || typeof v === 'string')))
     && (o.prevOpId === undefined || (typeof o.prevOpId === 'string' && !!o.prevOpId && o.prevOpId !== o.opId))
     && (o.baseUpdatedAt === undefined || typeof o.baseUpdatedAt === 'string')
     && typeof o.status === 'string' && ['pending', 'syncing', 'synced', 'needs_attention', 'discarded'].includes(o.status)
