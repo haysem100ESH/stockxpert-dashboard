@@ -35,7 +35,7 @@ interface ReadStatus { byPath: Record<string, { oldest?: string; misses: number 
 let status: ReadStatus = { byPath: {}, version: 0 };
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach(l => l());
-const currentPath = () => (typeof window !== 'undefined' ? window.location.pathname : '/');
+const currentPath = () => (typeof window !== 'undefined' && window.location?.pathname) || '/';
 function record(kind: 'hit' | 'miss', savedAt?: string) {
   const path = currentPath();
   const prev = status.byPath[path] ?? { misses: 0 };
