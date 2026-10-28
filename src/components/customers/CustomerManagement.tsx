@@ -243,7 +243,6 @@ export default function CustomerManagement() {
             onOpenChange={setShowPaymentDialog}
             customerId={selectedCustomer.id}
             customerName={selectedCustomer.name}
-            offlineBadge={customers.find(c => c.id === selectedCustomer.id)?.offlineBadge}
             outstandingAmount={selectedCustomer.totalDebt}
             creditScore={selectedCustomer.credit_score}
             onPaymentRecorded={fetchCustomers}
@@ -253,6 +252,7 @@ export default function CustomerManagement() {
             onOpenChange={setShowDetailDialog}
             customerId={selectedCustomer.id}
             customerName={selectedCustomer.name}
+            offlineBadge={customers.find(c => c.id === selectedCustomer.id)?.offlineBadge}
           />
           <CustomerLedgerDialog
             open={showLedgerDialog}
