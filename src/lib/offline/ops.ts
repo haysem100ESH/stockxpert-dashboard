@@ -45,7 +45,7 @@ export async function cachedEntity(userId: string, entity: EntityType, entityId:
     try {
       const parsed = JSON.parse(entry.data); const rows = Array.isArray(parsed) ? parsed : [parsed];
       const row = rows.find(r => r?.id === entityId && (entity === 'medicine_code' || r.branch_id === branchId));
-      if (row) return row as Record<string, unknown>;
+      if (row && typeof row.updated_at === 'string') return row as Record<string, unknown>;
     } catch { /* ignore malformed snapshots */ }
   }
 }

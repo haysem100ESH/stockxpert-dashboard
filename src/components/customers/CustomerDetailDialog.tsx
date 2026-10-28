@@ -14,6 +14,7 @@ interface CustomerDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   customerId: string;
   customerName: string;
+  offlineBadge?: string;
 }
 
 interface SaleRecord {
@@ -33,7 +34,7 @@ interface PaymentRecord {
   created_at: string;
 }
 
-export default function CustomerDetailDialog({ open, onOpenChange, customerId, customerName }: CustomerDetailDialogProps) {
+export default function CustomerDetailDialog({ open, onOpenChange, customerId, customerName, offlineBadge }: CustomerDetailDialogProps) {
   const [sales, setSales] = useState<SaleRecord[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,6 +79,7 @@ export default function CustomerDetailDialog({ open, onOpenChange, customerId, c
       <DialogContent className="w-[95vw] max-w-[600px] max-h-[85vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle className="text-base sm:text-lg">{customerName} — History</DialogTitle>
+          {offlineBadge && <Badge variant="secondary">{offlineBadge}</Badge>}
           <DialogDescription className="text-xs sm:text-sm">Purchase and payment history.</DialogDescription>
         </DialogHeader>
 

@@ -89,7 +89,6 @@ export function useOfflineSync() {
             if (item.kind === 'op') {
               const op = await offlineDb.ops.get(item.record.opId);
               if (!op || op.userId !== userId) continue;
-              if (op.status === 'needs_attention' && !await dependencyReady(op)) continue;
               setOfflineState({ connection: 'syncing' });
               const result = await syncOp(op);
               if (result?.status === 'applied') { queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh')); }

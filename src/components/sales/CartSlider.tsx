@@ -100,6 +100,7 @@ interface CartItem {
 interface Customer {
   id: string;
   name: string;
+  offlineBadge?: string;
   phone?: string | null;
   computed_debt?: number;
   credit_score?: number;
@@ -471,7 +472,7 @@ export default function CartSlider({
                       return (
                         <SelectItem key={c.id} value={c.id}>
                           <span className="flex items-center gap-1">
-                            {c.name}
+                            {c.name}{c.offlineBadge && <Badge variant="secondary" className="ml-2">{c.offlineBadge}</Badge>}
                             {c.phone ? <span className="text-muted-foreground"> — 📞 {c.phone}</span> : null}
                             {debt > 0 ? (
                               <span className="text-destructive font-medium"> — 🔴 Debt: {debt.toFixed(2)} ETB</span>
