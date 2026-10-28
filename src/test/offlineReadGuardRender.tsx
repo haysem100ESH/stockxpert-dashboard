@@ -26,6 +26,7 @@ mock.module('@/lib/offline/deviceSafety', () => ({ userSales: async () => [],
   isUnresolved: () => false, exportFingerprint: () => 'empty', exportPendingSales: async () => 'empty',
   retryUserSales: async () => {}, discardUserSale: async () => {},
 }));
+mock.module('@/lib/offline/ops', () => ({ retryOp: async () => {}, discardOp: async () => {} }));
 mock.module('@/lib/offline/backup', () => ({ backupSupported: () => true,
   setUpBackup: async () => { calls.backup++; }, resumeBackup: async () => {},
 }));

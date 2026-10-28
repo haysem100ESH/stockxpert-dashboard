@@ -33,7 +33,7 @@ test('backup includes unresolved + retained synced for this user only, allowlist
     sale('voided', 'v'), { ...sale('pending', 'x'), userId: 'other' }];
   Object.assign(records[0], { access_token: 'secret', creditScore: 5, nextAttemptAt: 1 });
   const doc = backup.buildBackupDocument(records, 'user', 'dev1', now);
-  expect(doc).toMatchObject({ format: 'pharmaxpert-backup', version: 1, userId: 'user', deviceId: 'dev1', generatedAt: now.toISOString() });
+  expect(doc).toMatchObject({ format: 'pharmaxpert-backup', version: 2, userId: 'user', deviceId: 'dev1', generatedAt: now.toISOString() });
   expect(doc.sales.map(r => r.clientTxnId)).toEqual(['p', 'y', 'n', 'd', 's1']);
   for (const r of doc.sales) expect(Object.keys(r).every(k => (EXPORT_FIELDS as readonly string[]).includes(k))).toBe(true);
   expect(JSON.stringify(doc)).not.toContain('secret');
@@ -81,7 +81,7 @@ test('restore rejects another cashier, malformed file and wrong version', () => 
   expect(() => parseBackup(fileFor([], 'other'), 'user')).toThrow(OTHER_CASHIER);
   expect(() => parseBackup('{not json', 'user')).toThrow('not a valid backup');
   expect(() => parseBackup(JSON.stringify({ format: 'x' }), 'user')).toThrow('not a PharmaXpert backup');
-  expect(() => parseBackup(fileFor([], 'user', { version: 2 }), 'user')).toThrow('Unsupported backup version');
+  expect(() => parseBackup(fileFor([], 'user', { version: 3 }), 'user')).toThrow('Unsupported backup version');
   expect(() => parseBackup(fileFor([], 'user', { sales: undefined }), 'user')).toThrow('missing required fields');
 });
 test('restore skips existing ids, keeps payloads identical, maps statuses, reports counts', async () => {
