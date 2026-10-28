@@ -17,6 +17,8 @@ for (const reachable of [true, false]) {
   test(`${reachable ? 'online' : 'offline'} sign-out clears session and retains every sale, catalog and meta`, async () => {
     const records = ['pending', 'syncing', 'needs_attention', 'discarded', 'synced', 'voided'].map((s, i) => sale(s as Parameters<typeof sale>[0], `txn-${i}`));
     await offlineDb.sales.bulkAdd(records);
+    await offlineDb.ops.clear();
+    await offlineDb.ops.put({ opId: 'saved-op', userId: 'user', branchId: 'branch', entityId: 'entity', entityType: 'customer', opType: 'customer.create', payload: { name: 'Saved' }, status: 'pending', attempts: 0, deviceCreatedAt: '2026-10-28T12:00:00Z', updatedAt: '2026-10-28T12:00:00Z' });
     await offlineDb.catalog.put({ id: 'item', ownerKey: 'user' } as any);
     const meta = ['profile:user', 'branches:user', 'lastSuccessfulSync:user', 'backupDir:user', 'deviceId'].map(key => ({ key, value: { retained: true } }));
     await offlineDb.meta.bulkPut(meta);
@@ -27,6 +29,7 @@ for (const reachable of [true, false]) {
     expect(calls).toBe(reachable ? 1 : 0);
     expect([...storage.entries()]).toEqual([['unrelated', 'keep']]);
     expect(await offlineDb.sales.toArray()).toEqual(records);
+    expect((await offlineDb.ops.get('saved-op'))?.payload).toEqual({ name: 'Saved' });
     expect(await offlineDb.catalog.get('item')).toMatchObject({ id: 'item', ownerKey: 'user' });
     expect(await offlineDb.meta.toArray()).toEqual([...meta].sort((a, b) => a.key.localeCompare(b.key)));
   });
