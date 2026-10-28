@@ -1,3 +1,4 @@
+import { opBadge, type LocalOp } from './opTypes';
 import type { ActivityRow } from '@/hooks/useActivityFeed';
 import type { LocalSale, PosPayload } from './types';
 import { readMeta, writeMeta } from './db';
@@ -55,4 +56,16 @@ export function pendingActivityCounts(rows: ActivityRow[], now = new Date()) {
   const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
   const count = (from: Date) => rows.filter(row => +new Date(row.created_at) >= +from && +new Date(row.created_at) < +tomorrow).length;
   return { today: count(today), week: count(week), month: count(month) };
+}
+export function pendingOpActivityRows(ops: LocalOp[], userId: string, serverRows: ActivityRow[] = [], range: ActivityRange = {}): ActivityRow[] {
+  const recorded = new Set(serverRows.flatMap(row => [row.client_txn_id, row.metadata?.op_id, row.metadata?.client_txn_id]).filter(Boolean));
+  return ops.flatMap(op => {
+    const badge = opBadge(op); const stamp = Date.parse(op.deviceCreatedAt);
+    if (op.userId !== userId || !badge || op.ownerVoided || recorded.has(op.opId) || !Number.isFinite(stamp)
+      || (range.from && stamp < +range.from) || (range.to && stamp >= +range.to)) return [];
+    return [{ id: `local-op:${op.opId}`, user_id: userId, owner_id: userId, branch_id: op.branchId,
+      activity_type: `${op.opType.endsWith('.create') ? 'create' : 'edit'}_${op.entityType}`, entity_type: op.entityType,
+      entity_id: op.entityId, previous_value: null, new_value: op.payload, metadata: { ...op.payload, op_id: op.opId },
+      created_at: op.deviceCreatedAt, client_txn_id: op.opId, pendingBadge: badge }];
+  });
 }

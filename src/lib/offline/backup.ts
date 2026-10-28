@@ -1,3 +1,4 @@
+import { exportOp, unresolvedOp, type LocalOp } from './opTypes';
 import { offlineDb, readMeta, writeMeta } from './db';
 import { exportRecord, isUnresolved, type ExportedSale } from './deviceSafety';
 import { SYNCED_RETENTION_MS } from './rules';
@@ -7,10 +8,10 @@ import type { LocalSale } from './types';
 import { withPosLock } from './network';
 
 export const BACKUP_FORMAT = 'pharmaxpert-backup';
-export const BACKUP_VERSION = 1;
+export const BACKUP_VERSION = 2;
 export const DATED_COPIES = 7;
 
-export interface BackupDocument { format: typeof BACKUP_FORMAT; version: 1; userId: string; deviceId: string; generatedAt: string; sales: ExportedSale[] }
+export interface BackupDocument { format: typeof BACKUP_FORMAT; version: 1 | 2; ops?: LocalOp[]; userId: string; deviceId: string; generatedAt: string; sales: ExportedSale[] }
 // Minimal File System Access surface so tests can supply a fake directory.
 export interface WritableLike { write(data: string): Promise<void>; close(): Promise<void>; abort?(): Promise<void> }
 export interface DirHandleLike {
@@ -30,11 +31,11 @@ export function forgetBackupDir(userId: string) { liveDirs.delete(userId); }
 export async function rememberBackupDir(userId: string, dir: DirHandleLike) { liveDirs.set(userId, dir); await writeMeta(backupDirKey(userId), dir); }
 export async function readBackupDir(userId: string) { return liveDirs.get(userId) ?? await readMeta<DirHandleLike>(backupDirKey(userId)); }
 
-export function buildBackupDocument(records: LocalSale[], userId: string, deviceId: string, now = new Date()): BackupDocument {
+export function buildBackupDocument(records: LocalSale[], userId: string, deviceId: string, now = new Date(), ops: LocalOp[] = []): BackupDocument {
   const cutoff = new Date(now.getTime() - SYNCED_RETENTION_MS).toISOString();
   const sales = records.filter(r => r.userId === userId && (isUnresolved(r) || (r.status === 'synced' && !!r.syncedAt && r.syncedAt >= cutoff)))
     .map(exportRecord);
-  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, userId, deviceId, generatedAt: now.toISOString(), sales };
+  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, userId, deviceId, generatedAt: now.toISOString(), sales, ops: ops.filter(o => o.userId === userId && (unresolvedOp(o) || o.updatedAt >= cutoff)).map(exportOp) };
 }
 export const backupPrefix = (userId: string, deviceId: string) => `pharmaxpert-backup-${userId.slice(0, 8)}-${deviceId}-`;
 export const latestName = (userId: string, deviceId: string) => `${backupPrefix(userId, deviceId)}latest.json`;
@@ -78,7 +79,7 @@ export async function runBackup(userId: string): Promise<BackupStatus> {
     if (permission !== 'granted') { setBackup({ state: 'failing', reason: 'permission denied' }); return getOfflineState().backup; }
     const records = await offlineDb.sales.where('userId').equals(userId).toArray();
     const now = new Date();
-    await writeBackupFiles(dir, buildBackupDocument(records, userId, await getDeviceId(), now), now);
+    await writeBackupFiles(dir, buildBackupDocument(records, userId, await getDeviceId(), now, await offlineDb.ops.where('userId').equals(userId).toArray()), now);
     setBackup({ state: 'ok', at: now.toISOString() });
     });
   } catch (e) { setBackup({ state: 'failing', reason: reasonOf(e) }); }
