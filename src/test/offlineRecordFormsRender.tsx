@@ -18,6 +18,10 @@ mock.module('@/hooks/useStaffPermissions', () => ({ useStaffPermissions: () => (
 mock.module('@/hooks/use-toast', () => ({ useToast: () => ({ toast: (value: unknown) => notifications.push(value) }), toast: () => {} }));
 mock.module('@/lib/db', () => ({ supabase: { from: () => { backendWrites++; throw new Error('Offline forms must not write to server'); } } }));
 mock.module('@/integrations/supabase/client', () => ({ supabase: {} }));
+mock.module('@/hooks/useBranchInventory', () => ({ useBranchInventory: () => ({ items: [] }) }));
+mock.module('@/hooks/useMedicineCodeAnalytics', () => ({ useMedicineCodeBatches: () => ({ batchesByMedicine: new Map(), globalAlertDays: 30 }), classifyExpiry: () => 'normal' }));
+mock.module('@/components/inventory/MedicineCodeAnalytics', () => ({ default: () => null }));
+mock.module('@/components/inventory/MedicineCodeBatchesDialog', () => ({ default: () => null }));
 mock.module('@/lib/offline/network', () => ({ checkReachability: async () => false, withPosLock: (work: () => Promise<unknown>) => new Promise((resolve, reject) => setTimeout(() => { work().then(resolve, reject); }, 0)) }));
 const React = await import('react'); const { act } = React;
 const { createRoot } = await import('react-dom/client'); const { MemoryRouter } = await import('react-router-dom');
@@ -28,6 +32,7 @@ const { default: AddCustomer } = await import('@/components/customers/AddCustome
 const { default: EditCustomer } = await import('@/components/customers/EditCustomerDialog');
 const { default: AddSupplier } = await import('@/components/suppliers/AddSupplierDialog');
 const { default: EditSupplier } = await import('@/components/suppliers/EditSupplierDialog');
+const { default: MedicineCodes } = await import('@/components/inventory/MedicineCodes');
 await offlineDb.open(); await offlineDb.meta.bulkPut([
   { key: 'profile:user', value: { id: 'user', role: 'staff', active: true } }, { key: 'branches:user', value: ['branch'] },
   { key: 'subscription:user', value: { status: 'active' } }, { key: 'permissions:user', value: { customers: 'edit', suppliers: 'edit', inventory: 'edit' } },
@@ -51,7 +56,17 @@ try {
   ops = await offlineDb.ops.toArray(); const supplier = ops.find(o => o.opType === 'supplier.create'); assert.ok(supplier); assert.equal(supplier.payload.email, 'supplier@example.test');
   await render(<EditSupplier open supplier={{ id: supplier.entityId, name: 'Supplier', email: 'supplier@example.test' }} onOpenChange={() => {}} onSupplierUpdated={() => {}} />); await input('phone', '987'); await submit();
   ops = await offlineDb.ops.toArray(); assert.deepEqual(ops.find(o => o.opType === 'supplier.update')?.payload, { phone: '987' });
+  await render(<MedicineCodes />);
+  const button = (title: string) => { const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === title || b.title === title); assert.ok(found); return found; };
+  await act(async () => button('New Code').click()); await flush();
+  await input('code_code', 'MED-1'); await input('code_label', 'Medicine'); await input('code_notes', 'Notes');
+  await act(async () => button('Save').click()); await flush();
+  ops = await offlineDb.ops.toArray(); const code = ops.find(o => o.opType === 'medicine_code.create'); assert.ok(code); assert.deepEqual(code.payload, { code: 'MED-1', label: 'Medicine', notes: 'Notes' });
+  await act(async () => button('Edit').click()); await flush();
+  const codeInput = document.getElementById('code_code') as HTMLInputElement; assert.ok(codeInput); assert.equal(codeInput.disabled, true);
+  await input('code_label', 'Changed label'); await act(async () => button('Save').click()); await flush();
+  ops = await offlineDb.ops.toArray(); assert.deepEqual(ops.find(o => o.opType === 'medicine_code.update')?.payload, { label: 'Changed label' });
   edit = false; await render(<AddCustomer open onOpenChange={() => {}} onCustomerAdded={() => {}} />);
   const disabled = document.querySelector<HTMLButtonElement>('button[type="submit"]'); assert.ok(disabled); assert.equal(disabled.disabled, true);
-  assert.equal(backendWrites, 0); assert.ok(notifications.length >= 4); console.log('Offline record form rules passed');
+  assert.equal(backendWrites, 0); assert.ok(notifications.length >= 6); console.log('Offline record form rules passed');
 } finally { await act(async () => root.unmount()); qc.clear(); await offlineDb.delete(); await dom.happyDOM.close(); }

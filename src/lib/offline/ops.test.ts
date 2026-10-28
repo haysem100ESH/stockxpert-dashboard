@@ -12,6 +12,7 @@ const { parseBackup, restoreBackup } = await import('./restore');
 const { exportDocument, exportFingerprint, clearUserDeviceData } = await import('./deviceSafety');
 const { pendingOpActivityRows } = await import('./activity');
 import type { LocalOp, OpResult } from './opTypes';
+const { saveReadEntry, describeRequest, overlayCachedBody } = await import('./readCache');
 
 beforeEach(async () => {
   await offlineDb.open();
@@ -137,4 +138,16 @@ test('same-user recovery resets only own syncing ops and persists through databa
 test('Dexie v4 table coexists with all earlier stores', async () => {
   const db = new OfflineDatabase('phase2-schema-test'); await db.open(); expect(db.verno).toBe(4);
   expect(db.tables.map(t => t.name).sort()).toEqual(['catalog', 'meta', 'ops', 'readCache', 'sales']); await db.delete();
+});
+test('cached server updated_at is preserved exactly through chained edits and read overlay does not overwrite the snapshot', async () => {
+  const updated_at = '2026-10-28T10:00:00.123456+00:00';
+  const req = describeRequest('https://example.test/rest/v1/customers?select=*&branch_id=eq.branch&order=name');
+  const data = JSON.stringify([{ id: 'entity', name: 'Old', phone: '123', branch_id: 'branch', updated_at }]);
+  await saveReadEntry('user', 'branch', req, 200, data, null);
+  const op = await enqueueOp({ userId: 'user', branchId: 'branch', opType: 'customer.update', entityId: 'entity', values: { name: 'New', phone: '123' }, previous: { name: 'Old', phone: '123' } });
+  expect(op.baseUpdatedAt).toBe(updated_at); expect(opRequest(op).base_updated_at).toBe(updated_at);
+  const overlay = JSON.parse(await overlayCachedBody(data, req, 'user', 'branch') ?? '[]');
+  expect(overlay[0].name).toBe('New'); expect(overlay[0].offlineBadge).toBe('Pending sync');
+  expect((await offlineDb.readCache.toArray())[0]?.data).toBe(data);
+  expect(await overlayCachedBody(data, req, 'other', 'branch')).toBe(data);
 });
