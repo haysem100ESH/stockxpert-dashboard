@@ -151,3 +151,16 @@ test('cached server updated_at is preserved exactly through chained edits and re
   expect((await offlineDb.readCache.toArray())[0]?.data).toBe(data);
   expect(await overlayCachedBody(data, req, 'other', 'branch')).toBe(data);
 });
+test('backup and export retain synced chain ancestors so restored edits are sendable', async () => {
+  const first = await create('first');
+  const second = await enqueueOp({ userId: 'user', branchId: 'branch', opType: 'customer.update', entityId: 'entity', values: { notes: 'Edit' }, previous: { notes: 'Note' } });
+  await settleOp(first, { status: 'applied', updated_at: '2026-10-28T12:00:00Z' });
+  const records = await userOps('user');
+  const doc = buildBackupDocument([], 'user', 'device', new Date(), records);
+  expect(exportDocument([], 'user', records).ops.map(o => o.opId)).toEqual(records.map(o => o.opId));
+  await offlineDb.ops.clear(); await restoreBackup(parseBackup(JSON.stringify(doc), 'user'), 'user');
+  expect((await offlineDb.ops.get(first.opId))?.status).toBe('synced');
+  const restored = await offlineDb.ops.get(second.opId); if (!restored) throw new Error('Missing dependent');
+  let sent = 0; await syncOp(restored, { call: async () => { sent++; return { data: { status: 'applied' }, error: null }; }, sessionValid: async () => true });
+  expect(sent).toBe(1);
+});

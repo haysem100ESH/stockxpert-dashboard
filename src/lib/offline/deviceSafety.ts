@@ -25,7 +25,8 @@ export function exportRecord(r: LocalSale): ExportedSale {
 }
 export function exportDocument(records: LocalSale[], userId: string, ops: LocalOp[] = []) {
   return { format: 'pharmaxpert-pos-export', version: 2, exportedAt: new Date().toISOString(),
-    userId, ops: ops.filter(o => o.userId === userId && unresolvedOp(o)).map(exportOp),
+    // Include confirmed predecessors so exports remain a complete recovery chain.
+    userId, ops: ops.filter(o => o.userId === userId).map(exportOp),
     sales: records.filter(r => r.userId === userId && isUnresolved(r)).map(exportRecord) };
 }
 export async function exportPendingSales(userId: string): Promise<string> {
