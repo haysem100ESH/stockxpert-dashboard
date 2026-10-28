@@ -13,7 +13,7 @@ export default function OfflineStatusBadge() {
   const label = connection === 'needs_attention' ? `Needs attention (${needsAttentionCount})`
     : connection === 'sign_in_required' ? 'Sign in required'
     : connection === 'syncing' ? 'Syncing' : connection === 'offline' ? 'Offline' : 'Online';
-  return <><Button variant="ghost" aria-label="Open device sales" onClick={() => setOpen(true)} className="h-auto px-1 py-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+  return <><Button data-offline-allow variant="ghost" aria-label="Open device sales" onClick={() => setOpen(true)} className="h-auto px-1 py-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
     <Badge variant={connection === 'needs_attention' || connection === 'sign_in_required' ? 'destructive' : 'secondary'}>{label}</Badge>
     <span className="text-muted-foreground">{pendingCount} pending</span>
     <span className="text-muted-foreground">Last sync: {lastSuccessfulSync ? formatDistanceToNow(new Date(lastSuccessfulSync), { addSuffix: true }) : 'never'}</span>
