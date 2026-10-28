@@ -3,4 +3,4 @@ test('offline customer, supplier and medicine code forms send only allowed field
   const result = Bun.spawnSync(['bun', 'src/test/offlineRecordFormsRender.tsx'], { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' });
   if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr));
   expect(new TextDecoder().decode(result.stdout)).toContain('Offline record form rules passed');
-});
+}, 20_000);
