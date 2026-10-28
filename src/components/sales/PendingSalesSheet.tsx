@@ -51,7 +51,7 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
   const ownRecords = recordsUserId === user?.id ? records : [];
   const removalBlocked = loading || recordsUserId !== user?.id || (ownRecords.some(isUnresolved) && exported !== exportFingerprint(ownRecords));
   const act = async (work: () => Promise<unknown>) => { try { await work(); } catch (e) { toast({ title: 'Action failed', description: e instanceof Error ? e.message : 'Please try again.', variant: 'destructive' }); } };
-  return <><Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="w-full sm:max-w-xl flex flex-col gap-4 p-4 sm:p-6">
+  return <><Sheet open={open} onOpenChange={onOpenChange}><SheetContent data-offline-allow className="w-full sm:max-w-xl flex flex-col gap-4 p-4 sm:p-6">
     <SheetHeader><SheetTitle>Device sales</SheetTitle><SheetDescription>Saved on device is not confirmation by the server.</SheetDescription></SheetHeader>
     <Button variant="outline" className="self-start" onClick={() => { if (user) void act(async () => setExported(await exportPendingSales(user.id))); }}><Download className="h-4 w-4 mr-2" />Export pending sales</Button>
     <div className="flex flex-wrap gap-2">
@@ -83,7 +83,7 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
     </div>
     <Button variant="outline" className="self-start text-destructive" onClick={() => setRetireOpen(true)}><Trash2 className="h-4 w-4 mr-2" />Remove my data from this PC</Button>
   </SheetContent></Sheet>
-    <Dialog open={retireOpen} onOpenChange={value => { if (!retireBusy) setRetireOpen(value); }}><DialogContent>
+    <Dialog open={retireOpen} onOpenChange={value => { if (!retireBusy) setRetireOpen(value); }}><DialogContent data-offline-allow>
       <DialogHeader><DialogTitle>Remove my data from this PC?</DialogTitle><DialogDescription>For retiring or handing over a PC only. This deletes your saved sales, prices, account cache and backup folder connection from this PC, then signs you out. Other cashiers’ data and backup files are not deleted. You will need internet to sign in again.</DialogDescription></DialogHeader>
       {ownRecords.some(isUnresolved) && <p className="text-sm text-destructive">Export your current unresolved sales, including discarded sales, and keep the downloaded file safe before removing your data.</p>}
       {exported && <p className="text-sm text-muted-foreground">Download requested. Verify the file is safely retained before confirming.</p>}
@@ -97,7 +97,7 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
         }}>Confirm removal</Button>
       </DialogFooter>
     </DialogContent></Dialog>
-    <Dialog open={!!discardId} onOpenChange={value => { if (!value && !discardBusy) setDiscardId(undefined); }}><DialogContent>
+    <Dialog open={!!discardId} onOpenChange={value => { if (!value && !discardBusy) setDiscardId(undefined); }}><DialogContent data-offline-allow>
       <DialogHeader><DialogTitle>Discard device-only sale?</DialogTitle><DialogDescription>This sale was not recorded by the server. Discarding releases its stock reservation. Its history stays after sign-out and must be exported before removing your data from this PC.</DialogDescription></DialogHeader>
       <label htmlFor="discard-sale-note" className="text-sm font-medium">Required note</label>
       <Textarea id="discard-sale-note" value={note} onChange={event => setNote(event.target.value)} disabled={discardBusy} />
@@ -108,7 +108,7 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
         void act(async () => { try { await discardUserSale(user.id, txnId, note); setDiscardId(undefined); } finally { setDiscardBusy(false); } });
       }}>Confirm discard</Button></DialogFooter>
     </DialogContent></Dialog>
-    <Dialog open={!!restore} onOpenChange={value => { if (!value && !restoreBusy) setRestore(undefined); }}><DialogContent>
+    <Dialog open={!!restore} onOpenChange={value => { if (!value && !restoreBusy) setRestore(undefined); }}><DialogContent data-offline-allow>
       <DialogHeader><DialogTitle>Restore {restore?.name}?</DialogTitle><DialogDescription>Only sales not already on this device are added. They will be sent to the server, which ignores any it already recorded.</DialogDescription></DialogHeader>
       {restore && <div className="text-sm space-y-1">
         <p>Sales in file: {restore.preview.count}</p>

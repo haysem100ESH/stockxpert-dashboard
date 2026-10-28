@@ -12,6 +12,7 @@ import { clearUserDeviceData } from '@/lib/offline/deviceSafety';
 import { withPosLock } from '@/lib/offline/network';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
+import { setReadUser } from '@/lib/offline/readCache';
 
 interface Profile {
   id: string;
@@ -57,6 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       setSession(nextSession);
       setUser(nextSession?.user ?? null);
+      setReadUser(nextSession?.user?.id ?? null);
       if (!nextSession?.user) {
         setProfile(null); setLoading(false); return;
       }
@@ -196,6 +198,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem('selectedBranchId');
       queryClient.clear();
       setOfflineState({ records: [], pendingCount: 0, needsAttentionCount: 0, lastSuccessfulSync: undefined, backup: { state: 'not_set_up' } });
+      setReadUser(null);
       setUser(null); setSession(null); setProfile(null);
       // Discard the SDK's in-memory credentials offline without a network call.
       if (!reachable) window.location.assign('/auth');
