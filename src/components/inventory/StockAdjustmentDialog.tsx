@@ -13,6 +13,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { useBranchContext } from '@/hooks/useBranchContext';
 import { createBatch, deductFIFO, getBatchesForItem, syncBranchItemQuantity, type InventoryBatch } from '@/lib/batchInventory';
 import { logActivity } from '@/lib/activityLog';
+import { useOfflineStatus } from '@/lib/offline/store';
+import { checkReachability } from '@/lib/offline/network';
+import OfflineStockDialog from './OfflineStockDialog';
 
 interface Medicine {
   id: string;                // branch_items.id
@@ -31,11 +34,13 @@ interface StockAdjustmentDialogProps {
   onOpenChange: (open: boolean) => void;
   medicine: Medicine | null;
   onAdjusted: () => void;
+  offlineMode?: 'receive' | 'adjust';
 }
 
 type Mode = 'adjust' | 'new_batch';
 
-export default function StockAdjustmentDialog({ open, onOpenChange, medicine, onAdjusted }: StockAdjustmentDialogProps) {
+export default function StockAdjustmentDialog({ open, onOpenChange, medicine, onAdjusted, offlineMode }: StockAdjustmentDialogProps) {
+  const { reachable } = useOfflineStatus();
   const [mode, setMode] = useState<Mode>('adjust');
   // Adjust mode
   const [adjustmentType, setAdjustmentType] = useState<'increase' | 'decrease'>('increase');
@@ -117,6 +122,7 @@ export default function StockAdjustmentDialog({ open, onOpenChange, medicine, on
 
   const handleAdjust = async () => {
     if (!medicine) return;
+    if (!await checkReachability()) { toast({ title: 'Needs internet', description: 'Use the offline stock adjustment form.', variant: 'destructive' }); return; }
     if (!reason.trim()) {
       toast({ title: 'Error', description: 'Reason is required.', variant: 'destructive' });
       return;
@@ -267,6 +273,7 @@ export default function StockAdjustmentDialog({ open, onOpenChange, medicine, on
 
   const handleAddBatch = async () => {
     if (!medicine) return;
+    if (!await checkReachability()) { toast({ title: 'Needs internet', description: 'Use the offline receive stock form.', variant: 'destructive' }); return; }
     const qty = parseFloat(batchQty);
     const pp = parseFloat(batchPurchasePrice);
     const sp = parseFloat(batchSellingPrice);
@@ -391,6 +398,8 @@ export default function StockAdjustmentDialog({ open, onOpenChange, medicine, on
       setSaving(false);
     }
   };
+
+  if (!reachable && medicine) return <OfflineStockDialog key={`${medicine.id}:${offlineMode ?? 'adjust'}`} open={open} onOpenChange={onOpenChange} item={medicine} initialMode={offlineMode ?? 'adjust'} onSaved={onAdjusted} />;
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) resetForm(); onOpenChange(o); }}>
