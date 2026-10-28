@@ -1,3 +1,4 @@
+import { useOfflineRecordForm } from '@/hooks/useOfflineRecords';
 import { useState } from 'react';
 import { ColumnDef } from '@tanstack/react-table';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -50,6 +51,7 @@ export default function CustomerManagement() {
   const { selectedBranch } = useBranchContext();
   const { toast } = useToast();
   const readOnly = useReadOnly();
+  const offlineForm = useOfflineRecordForm('customer');
 
   // Cache-first fetch via TanStack Query — instant hydration on revisit.
   const { customers, loading, refetch } = useCustomers();
@@ -61,7 +63,7 @@ export default function CustomerManagement() {
   const openLedger = (c: Customer) => { setSelectedCustomer(c); setShowLedgerDialog(true); };
 
   const allColumns: ColumnDef<Customer>[] = [
-    { accessorKey: 'name', header: 'Name', cell: ({ row }) => <span className="font-medium">{row.original.name}</span> },
+    { accessorKey: 'name', header: 'Name', cell: ({ row }) => <span className="font-medium">{row.original.name}{row.original.offlineBadge && <Badge variant="secondary" className="ml-2">{row.original.offlineBadge}</Badge>}</span> },
     { accessorKey: 'phone', header: 'Phone', cell: ({ row }) => row.original.phone || <span className="text-muted-foreground">—</span> },
     {
       accessorKey: 'credit_score',
@@ -107,7 +109,7 @@ export default function CustomerManagement() {
                 <Eye className="mr-2 h-4 w-4" /> View Details
               </DropdownMenuItem>
               {!readOnly && (
-                <DropdownMenuItem onClick={() => openEdit(c)}>
+                <DropdownMenuItem data-offline-allow={offlineForm.offlineAllowed || undefined} disabled={!offlineForm.reachable && !offlineForm.canEdit} onClick={() => openEdit(c)}>
                   <Edit className="mr-2 h-4 w-4" /> Edit
                 </DropdownMenuItem>
               )}
@@ -127,7 +129,7 @@ export default function CustomerManagement() {
   ];
 
   const debtorColumns: ColumnDef<Customer>[] = [
-    { accessorKey: 'name', header: 'Name', cell: ({ row }) => <span className="font-medium">{row.original.name}</span> },
+    { accessorKey: 'name', header: 'Name', cell: ({ row }) => <span className="font-medium">{row.original.name}{row.original.offlineBadge && <Badge variant="secondary" className="ml-2">{row.original.offlineBadge}</Badge>}</span> },
     { accessorKey: 'phone', header: 'Phone', cell: ({ row }) => row.original.phone || '—' },
     {
       accessorKey: 'totalDebt',
@@ -191,14 +193,14 @@ export default function CustomerManagement() {
             <TabsTrigger value="all">All Customers</TabsTrigger>
             <TabsTrigger value="debtors">Debtors ({debtors.length})</TabsTrigger>
           </TabsList>
-          <Button onClick={() => {
+          <Button data-offline-allow={offlineForm.offlineAllowed || undefined} onClick={() => {
             if (readOnly) return;
             if (!selectedBranch) {
               toast({ title: 'Branch Required', description: 'Please select a specific branch before creating a customer.', variant: 'destructive' });
               return;
             }
             setShowAddDialog(true);
-          }} size="sm" disabled={readOnly}>
+          }} size="sm" disabled={readOnly || (!offlineForm.reachable && !offlineForm.canEdit)}>
             <Plus className="h-4 w-4 mr-1" /> Add Customer
           </Button>
         </div>

@@ -1,3 +1,4 @@
+import { useOfflineRecordForm } from '@/hooks/useOfflineRecords';
 /**
  * MedicineCodes management page.
  * Lists owner-defined codes with linked medicine count + total combined stock.
@@ -49,6 +50,7 @@ export default function MedicineCodes() {
   const { codes, loading, create, update, remove } = useMedicineCodes();
   const { items } = useBranchInventory();
   const { toast } = useToast();
+  const offlineForm = useOfflineRecordForm('medicine_code');
 
   const [search, setSearch] = useState('');
   const [packagings, setPackagings] = useState<Record<string, Packaging>>({});
@@ -183,10 +185,10 @@ export default function MedicineCodes() {
     try {
       if (editing) {
         await update(editing.id, form);
-        toast({ title: 'Code updated' });
+        toast({ title: offlineForm.reachable ? 'Code updated' : 'Saved on this PC' });
       } else {
         await create(form);
-        toast({ title: 'Code created' });
+        toast({ title: offlineForm.reachable ? 'Code created' : 'Saved on this PC' });
       }
       setEditing(null); setCreating(false);
     } catch (e: any) {
@@ -347,7 +349,7 @@ export default function MedicineCodes() {
             Group variants of the same drug under a single code to see combined stock.
           </p>
         </div>
-        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-2" />New Code</Button>
+        <Button data-offline-allow={offlineForm.offlineAllowed || undefined} disabled={!offlineForm.reachable && !offlineForm.canEdit} onClick={openCreate}><Plus className="h-4 w-4 mr-2" />New Code</Button>
       </div>
 
       {/* Dashboard cards */}
@@ -423,6 +425,7 @@ export default function MedicineCodes() {
                         <Badge variant="outline" className="font-mono text-sm">{c.code}</Badge>
                         <div className="min-w-0">
                           <CardTitle className="text-base truncate">{c.label}</CardTitle>
+                          {c.offlineBadge && <Badge variant="secondary">{c.offlineBadge}</Badge>}
                           {c.notes && <p className="text-xs text-muted-foreground mt-0.5">{c.notes}</p>}
                         </div>
                       </div>
@@ -433,7 +436,7 @@ export default function MedicineCodes() {
                           <Link2 className="h-4 w-4 sm:mr-1" />
                           <span className="hidden sm:inline">Assign</span>
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => openEdit(c)} title="Edit">
+                        <Button data-offline-allow={offlineForm.offlineAllowed || undefined} disabled={!offlineForm.reachable && !offlineForm.canEdit} variant="ghost" size="icon" onClick={() => openEdit(c)} title="Edit">
                           <Edit className="h-4 w-4" />
                         </Button>
                         <Button variant="ghost" size="icon" onClick={() => setConfirmDelete(c)} title="Delete">
@@ -500,7 +503,7 @@ export default function MedicineCodes() {
 
       {/* Create / Edit dialog */}
       <Dialog open={creating || !!editing} onOpenChange={(v) => { if (!v) { setCreating(false); setEditing(null); } }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent data-offline-allow={offlineForm.offlineAllowed || undefined} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit Code' : 'New Code'}</DialogTitle>
             <DialogDescription>
@@ -510,7 +513,7 @@ export default function MedicineCodes() {
           <div className="space-y-3">
             <div className="space-y-1">
               <Label htmlFor="code_code">Code *</Label>
-              <Input id="code_code" value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} placeholder="e.g. AMOX-500" />
+              <Input disabled={!offlineForm.reachable && !!editing} title={!offlineForm.reachable && editing ? "Needs internet" : undefined} id="code_code" value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} placeholder="e.g. AMOX-500" />
             </div>
             <div className="space-y-1">
               <Label htmlFor="code_label">Label *</Label>
@@ -523,7 +526,7 @@ export default function MedicineCodes() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</Button>
-            <Button onClick={handleSubmit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+            <Button onClick={handleSubmit} disabled={busy || (!offlineForm.reachable && !offlineForm.canEdit)}>{busy ? 'Saving…' : 'Save'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,3 +1,4 @@
+import { useOfflineRecordForm, useRecordOverlay } from './useOfflineRecords';
 /**
  * useMedicineCodes
  * --------------------------------------------------------------------------
@@ -19,6 +20,8 @@ export interface MedicineCode {
   label: string;
   notes: string | null;
   created_at: string;
+  updated_at?: string;
+  offlineBadge?: string;
 }
 
 const KEY = 'medicine-codes';
@@ -41,7 +44,7 @@ async function fetchCodes(ownerId: string | null): Promise<MedicineCode[]> {
   if (!ownerId) return [];
   const { data, error } = await (supabase as any)
     .from('medicine_codes')
-    .select('id, owner_id, code, label, notes, created_at')
+    .select('id, owner_id, code, label, notes, created_at, updated_at')
     .eq('owner_id', ownerId)
     .order('code');
   if (error) {
@@ -55,6 +58,7 @@ async function fetchCodes(ownerId: string | null): Promise<MedicineCode[]> {
 export function useMedicineCodes() {
   const { profile } = useAuth();
   const qc = useQueryClient();
+  const offlineForm = useOfflineRecordForm('medicine_code');
 
   const ownerQuery = useQuery({
     queryKey: ['medicine-codes-owner', profile?.id],
@@ -73,6 +77,9 @@ export function useMedicineCodes() {
   });
 
   const create = async (input: { code: string; label: string; notes?: string }) => {
+    if (await offlineForm.shouldSaveOffline()) {
+      await offlineForm.save(input); return { ...input, id: '', owner_id: ownerId ?? '', created_at: new Date().toISOString(), notes: input.notes ?? null } as MedicineCode;
+    }
     if (!ownerId) throw new Error('Owner not resolved');
     const { data, error } = await (supabase as any)
       .from('medicine_codes')
@@ -82,7 +89,7 @@ export function useMedicineCodes() {
         label: input.label.trim(),
         notes: input.notes?.trim() || null,
       })
-      .select('id, owner_id, code, label, notes, created_at')
+      .select('id, owner_id, code, label, notes, created_at, updated_at')
       .single();
     if (error) throw error;
     qc.invalidateQueries({ queryKey: [KEY] });
@@ -91,7 +98,11 @@ export function useMedicineCodes() {
   };
 
   const update = async (id: string, patch: Partial<Pick<MedicineCode, 'code' | 'label' | 'notes'>>) => {
-    const prev = (query.data ?? []).find((c) => c.id === id);
+    const prev = codes.find((c) => c.id === id);
+    if (await offlineForm.shouldSaveOffline()) {
+      if (!prev) throw new Error('Open this record before editing offline.');
+      await offlineForm.save(patch, prev as unknown as { id: string } & Record<string, unknown>); return;
+    }
     const nextPatch = {
       ...(patch.code !== undefined ? { code: patch.code.trim() } : {}),
       ...(patch.label !== undefined ? { label: patch.label.trim() } : {}),
@@ -118,8 +129,9 @@ export function useMedicineCodes() {
     logActivity({ type: 'delete_medicine_code', entityType: 'medicine_code', entityId: id, previous: prev ? { code: prev.code, label: prev.label } : null, metadata: { code: prev?.code, label: prev?.label } });
   };
 
+  const codes = useRecordOverlay(query.data ?? [], 'medicine_code');
   return {
-    codes: query.data ?? [],
+    codes,
     loading: query.isLoading || ownerQuery.isLoading,
     ownerId,
     create,

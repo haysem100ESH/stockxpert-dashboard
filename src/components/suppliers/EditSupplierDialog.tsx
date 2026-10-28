@@ -1,3 +1,4 @@
+import { useOfflineRecordForm } from '@/hooks/useOfflineRecords';
 import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -38,6 +39,7 @@ export default function EditSupplierDialog({
   });
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const offlineForm = useOfflineRecordForm('supplier');
 
   useEffect(() => {
     if (supplier && open) {
@@ -54,6 +56,17 @@ export default function EditSupplierDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supplier) return;
+    if (await offlineForm.shouldSaveOffline()) {
+      setLoading(true);
+      try {
+        const warning = await offlineForm.save(formData, supplier as unknown as { id: string } & Record<string, unknown>);
+        toast({ title: 'Saved on this PC', description: warning });
+         onOpenChange(false); onSupplierUpdated();
+      } catch (error) { toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Please try again.', variant: 'destructive' }); }
+      finally { setLoading(false); }
+      return;
+    }
+
     
     setLoading(true);
 
@@ -90,7 +103,7 @@ export default function EditSupplierDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent data-offline-allow={offlineForm.offlineAllowed || undefined}>
         <DialogHeader>
           <DialogTitle>Edit Supplier</DialogTitle>
           <DialogDescription>
@@ -150,7 +163,7 @@ export default function EditSupplierDialog({
           </div>
 
           <div className="flex gap-2 pt-4">
-            <Button type="submit" disabled={loading} className="flex-1">
+            <Button type="submit" disabled={loading || (!offlineForm.reachable && !offlineForm.canEdit)} className="flex-1">
               {loading ? "Updating..." : "Update Supplier"}
             </Button>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

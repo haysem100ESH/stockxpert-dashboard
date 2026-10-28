@@ -1,3 +1,4 @@
+import { useOfflineRecordForm } from '@/hooks/useOfflineRecords';
 import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -34,6 +35,7 @@ export default function EditCustomerDialog({ open, onOpenChange, customer, onCus
   const [customLimit, setCustomLimit] = useState('');
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const offlineForm = useOfflineRecordForm('customer');
 
   useEffect(() => {
     if (customer) {
@@ -47,7 +49,7 @@ export default function EditCustomerDialog({ open, onOpenChange, customer, onCus
       setCustomLimit(mode === 'custom' ? String(raw) : '');
 
       // If raw isn't on the row (older callers), fetch it.
-      if (customer.max_credit_limit_raw === undefined) {
+      if (offlineForm.reachable && customer.max_credit_limit_raw === undefined) {
         (async () => {
           const { data } = await (supabase as any)
             .from('customers')
@@ -66,6 +68,17 @@ export default function EditCustomerDialog({ open, onOpenChange, customer, onCus
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customer || !name.trim()) return;
+    if (await offlineForm.shouldSaveOffline()) {
+      setLoading(true);
+      try {
+        const warning = await offlineForm.save({ name, phone, notes }, customer as unknown as { id: string } & Record<string, unknown>);
+        toast({ title: 'Saved on this PC', description: warning });
+         onOpenChange(false); onCustomerUpdated();
+      } catch (error) { toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Please try again.', variant: 'destructive' }); }
+      finally { setLoading(false); }
+      return;
+    }
+
 
     let maxLimit: number | null;
     if (limitMode === 'auto') maxLimit = null;
@@ -98,7 +111,7 @@ export default function EditCustomerDialog({ open, onOpenChange, customer, onCus
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px] max-h-[90vh] overflow-y-auto">
+      <DialogContent data-offline-allow={offlineForm.offlineAllowed || undefined} className="sm:max-w-[480px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Customer</DialogTitle>
           <DialogDescription>Update customer details and credit limit.</DialogDescription>
@@ -119,7 +132,7 @@ export default function EditCustomerDialog({ open, onOpenChange, customer, onCus
 
           <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
             <Label className="text-sm font-semibold">Credit Limit</Label>
-            <RadioGroup value={limitMode} onValueChange={(v) => setLimitMode(v as CreditLimitMode)} className="space-y-1.5">
+            <RadioGroup disabled={!offlineForm.reachable} title={!offlineForm.reachable ? "Needs internet" : undefined} value={limitMode} onValueChange={(v) => setLimitMode(v as CreditLimitMode)} className="space-y-1.5">
               <div className="flex items-center gap-2">
                 <RadioGroupItem value="auto" id="ec-auto" />
                 <Label htmlFor="ec-auto" className="text-sm cursor-pointer font-normal">Auto (based on credit score)</Label>
@@ -135,7 +148,7 @@ export default function EditCustomerDialog({ open, onOpenChange, customer, onCus
             </RadioGroup>
             {limitMode === 'custom' && (
               <Input
-                type="number" min="0" step="0.01"
+                disabled={!offlineForm.reachable} title={!offlineForm.reachable ? "Needs internet" : undefined} type="number" min="0" step="0.01"
                 value={customLimit}
                 onChange={e => setCustomLimit(e.target.value)}
                 placeholder="e.g. 7500"
@@ -146,7 +159,7 @@ export default function EditCustomerDialog({ open, onOpenChange, customer, onCus
 
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={loading}>{loading ? 'Saving...' : 'Save Changes'}</Button>
+            <Button type="submit" disabled={loading || (!offlineForm.reachable && !offlineForm.canEdit)}>{loading ? 'Saving...' : 'Save Changes'}</Button>
           </div>
         </form>
       </DialogContent>

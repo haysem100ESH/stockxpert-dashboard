@@ -1,3 +1,4 @@
+import { useRecordOverlay } from './useOfflineRecords';
 /**
  * useCustomers
  * ----------------------------------------------------------------------------
@@ -24,6 +25,9 @@ export interface CustomerRow {
   phone?: string | null;
   notes?: string | null;
   created_at: string;
+  updated_at?: string;
+  branch_id?: string;
+  offlineBadge?: string;
   totalPurchases: number;
   totalPaid: number;
   totalDebt: number;
@@ -145,8 +149,9 @@ export function useCustomers() {
     return () => window.removeEventListener('app:refresh', handler);
   }, [queryClient]);
 
+  const customers = useRecordOverlay(query.data ?? [], 'customer');
   return {
-    customers: query.data ?? [],
+    customers,
     loading: query.isLoading,
     isFetching: query.isFetching,
     refetch: query.refetch,
