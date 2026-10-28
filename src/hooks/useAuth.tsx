@@ -197,7 +197,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await signOutSession(reachable, () => supabase.auth.signOut({ scope: 'local' }));
       localStorage.removeItem('selectedBranchId');
       queryClient.clear();
-      setOfflineState({ records: [], pendingCount: 0, needsAttentionCount: 0, lastSuccessfulSync: undefined, backup: { state: 'not_set_up' } });
+      setOfflineState({ records: [], ops: [], pendingCount: 0, needsAttentionCount: 0, lastSuccessfulSync: undefined, backup: { state: 'not_set_up' } });
       setReadUser(null);
       setUser(null); setSession(null); setProfile(null);
       // Discard the SDK's in-memory credentials offline without a network call.

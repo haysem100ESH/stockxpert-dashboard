@@ -12,24 +12,27 @@ import { saleEffects } from '@/lib/offline/effects';
 import { fetchCatalog, replaceCatalog } from '@/lib/offline/catalog';
 import type { RpcResult } from '@/lib/offline/types';
 import { supabase } from '@/lib/db';
+import { syncOp, recoverUserOps, dependencyReady, settleOp } from '@/lib/offline/syncOp';
+import type { OpResult } from '@/lib/offline/opTypes';
 
 export function useOfflineSync() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (!user) { setOfflineState({ records: [], pendingCount: 0, needsAttentionCount: 0 }); return; }
+    if (!user) { setOfflineState({ records: [], ops: [], pendingCount: 0, needsAttentionCount: 0 }); return; }
     const userId = user.id;
     let disposed = false;
     let running = false;
     const subscription = liveQuery(async () => ({
       records: await offlineDb.sales.where('userId').equals(userId).sortBy('createdAt'),
+      ops: await offlineDb.ops.where('userId').equals(userId).sortBy('deviceCreatedAt'),
       lastSuccessfulSync: await readMeta<string>(`lastSuccessfulSync:${userId}`),
-    })).subscribe({ next: ({ records, lastSuccessfulSync }) => {
+    })).subscribe({ next: ({ records, ops, lastSuccessfulSync }) => {
       if (disposed) return;
-      const pendingCount = records.filter(r => r.status === 'pending' || r.status === 'syncing').length;
-      const needsAttentionCount = records.filter(r => r.status === 'needs_attention').length;
+      const pendingCount = [...records, ...ops].filter(r => r.status === 'pending' || r.status === 'syncing').length;
+      const needsAttentionCount = [...records, ...ops].filter(r => r.status === 'needs_attention').length;
       const current = getOfflineState();
-      setOfflineState({ records, pendingCount, needsAttentionCount, lastSuccessfulSync,
+      setOfflineState({ records, ops, pendingCount, needsAttentionCount, lastSuccessfulSync,
         connection: current.connection === 'syncing' || current.connection === 'sign_in_required' ? current.connection
           : !current.reachable ? 'offline' : needsAttentionCount ? 'needs_attention' : 'online' });
     }, error: () => setOfflineState({ storageError: 'Local storage is unavailable. Offline sales cannot be saved.' }) });
@@ -40,7 +43,7 @@ export function useOfflineSync() {
       try {
         await withPosLock(async () => {
           if (disposed) return;
-          if (recover) await recoverUserQueue(userId);
+          if (recover) { await recoverUserQueue(userId); await recoverUserOps(userId); }
           const cutoff = new Date(Date.now() - SYNCED_RETENTION_MS).toISOString();
           await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'synced' && !!r.syncedAt && r.syncedAt < cutoff).delete();
           if (!await checkReachability() || !await validSession(userId)) return;
@@ -67,9 +70,34 @@ export function useOfflineSync() {
               queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh'));
             }
           }
-          const pending = await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'pending').sortBy('createdAt');
-          for (const record of pending) {
-            if (disposed || (record.nextAttemptAt ?? 0) > Date.now()) break;
+          const ownerOps = await offlineDb.ops.where('userId').equals(userId).and(o => o.status === 'needs_attention' && !!o.serverIssue).toArray();
+          for (const op of ownerOps) {
+            const { data, error } = await supabase.from('offline_ops').select('*').eq('op_id', op.opId).maybeSingle();
+            if (!error && data && ['applied', 'voided'].includes(data.status)) {
+              await settleOp(op, { ...data, updated_at: data.result?.updated_at ?? data.updated_at,
+                resolution_note: data.resolution_note ?? data.result?.resolution_note } as OpResult);
+              queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh'));
+            }
+          }
+          const sales = await offlineDb.sales.where('userId').equals(userId).and(r => r.status === 'pending').toArray();
+          const ops = await offlineDb.ops.where('userId').equals(userId).and(o => o.status === 'pending' || (o.status === 'needs_attention' && o.reasonCode === 'DEPENDS_ON_UNSYNCED')).toArray();
+          const pending = [...sales.map(record => ({ kind: 'sale' as const, record, at: record.payload.device_created_at || record.createdAt })),
+            ...ops.map(record => ({ kind: 'op' as const, record, at: record.deviceCreatedAt }))].sort((a, b) => a.at.localeCompare(b.at));
+          for (const item of pending) {
+            if (disposed) break;
+            if ((item.record.nextAttemptAt ?? 0) > Date.now()) continue;
+            if (item.kind === 'op') {
+              const op = await offlineDb.ops.get(item.record.opId);
+              if (!op || op.userId !== userId) continue;
+              if (op.status === 'needs_attention' && !await dependencyReady(op)) continue;
+              setOfflineState({ connection: 'syncing' });
+              const result = await syncOp(op);
+              if (result?.status === 'applied') { queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh')); }
+              if (!result && (await offlineDb.ops.get(op.opId))?.status === 'pending' && !await dependencyReady(op)) continue;
+              if (!result && (await offlineDb.ops.get(op.opId))?.status === 'pending') break;
+              continue;
+            }
+            const record = item.record;
             setOfflineState({ connection: 'syncing' });
             const result = await syncSale(record);
             if (!result) {
@@ -78,13 +106,12 @@ export function useOfflineSync() {
               continue;
             }
             if (result.status === 'synced') {
-                await saleEffects(record, result);
-                try {
-                  const rows = await fetchCatalog([record.branchId], userId);
-                  await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([record.branchId], userId, rows));
-                } catch { /* Keep conservative snapshot. */ }
-                queryClient.invalidateQueries();
-                window.dispatchEvent(new Event('app:refresh'));
+              await saleEffects(record, result);
+              try {
+                const rows = await fetchCatalog([record.branchId], userId);
+                await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([record.branchId], userId, rows));
+              } catch { /* Keep conservative snapshot. */ }
+              queryClient.invalidateQueries(); window.dispatchEvent(new Event('app:refresh'));
             }
           }
         });
