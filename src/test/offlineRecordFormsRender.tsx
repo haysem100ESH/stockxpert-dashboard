@@ -6,7 +6,7 @@ const dom = new Window({ url: 'http://localhost:8080/customers' });
 for (const key of ['dispatchEvent', 'addEventListener', 'removeEventListener']) {
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: Reflect.get(dom, key).bind(dom) });
 }
-for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'NodeFilter', 'MutationObserver', 'Event', 'MouseEvent', 'CustomEvent', 'HTMLInputElement', 'DocumentFragment', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
+for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'NodeFilter', 'MutationObserver', 'ResizeObserver', 'Event', 'MouseEvent', 'CustomEvent', 'HTMLInputElement', 'DocumentFragment', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
   const value = key === 'window' ? dom : Reflect.get(dom, key);
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: typeof value === 'function' && /^[a-z]/.test(key) ? value.bind(dom) : value });
 }
