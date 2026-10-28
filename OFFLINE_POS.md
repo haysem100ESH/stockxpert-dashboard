@@ -234,3 +234,32 @@ The cache correction preserves already-server-filtered projected rows; the DOM c
 (fail) offline customer, supplier and medicine code forms send only allowed fields; credit/code edits and read permission block writes [5011.70ms]
   ^ this test timed out after 5000ms.
 ```
+
+
+### Final Phase 2 verification
+
+- Full `bun test`: **192 passed, 0 failed, 614 assertions across 16 files**. Final failures: none. Tests cover atomic writes/rollback, create→edit→edit chaining, blocked dependencies/re-evaluation, unknown-outcome immutable retry, all statuses, permanent/temporary classification, cached exact server versions, immutable snapshots, private overlays, permitted form submission fields, read-permission blocking, offline credit/code-text restrictions, backup v2/v1 restore, synced ancestor recovery, export gates, sign-out retention, owner voids and activity deduplication.
+- Latest automatic compilation: **build OK (2026-10-28T11:46:57Z)**. A separate production build was not run: manual builds/typechecks are prohibited by the workspace harness. Production-mode build verification remains unavailable, not implied by automatic compilation.
+- No live authenticated RPC/owner reconciliation, browser/device, installed PWA, or real folder verification. The rendered form checks are isolated happy-dom simulations, not device verification.
+- Restore preserves device-only refused operations as needs_attention (not automatically retried), resets interrupted syncing to pending, and retains synced ancestors. A partial/tampered backup missing an ancestor is fail-closed as DEPENDS_ON_UNSYNCED, never sent ahead of it.
+
+### Phase 2 files changed
+
+New:
+- `src/lib/offline/opTypes.ts`, `ops.ts`, `syncOp.ts`, `ops.test.ts`
+- `src/hooks/useOfflineRecords.ts`
+- `src/components/sales/PendingRecords.tsx`
+- `src/components/offline/RecordSyncIssues.tsx`, `OfflineRecordForms.test.ts`
+- `src/test/offlineRecordFormsRender.tsx`
+
+Updated:
+- `src/lib/offline/db.ts`, `store.ts`, `readCache.ts`, `readCache.test.ts`, `deviceSafety.ts`, `backup.ts`, `backup.test.ts`, `restore.ts`, `activity.ts`, `signOut.test.ts`
+- `src/hooks/useOfflineSync.ts`, `useOfflineBackup.ts`, `usePendingActivities.ts`, `useCustomers.tsx`, `useMedicineCodes.tsx`, `useSalesInventory.tsx`, `useAuth.tsx` (in-memory ops reset only)
+- `src/components/customers/AddCustomerDialog.tsx`, `EditCustomerDialog.tsx`, `CustomerManagement.tsx`, `CustomerDetailDialog.tsx`
+- `src/components/suppliers/AddSupplierDialog.tsx`, `EditSupplierDialog.tsx`, `SupplierManagement.tsx`
+- `src/components/inventory/MedicineCodes.tsx`
+- `src/components/sales/PendingSalesSheet.tsx`, `DeviceSignOutDialog.tsx`, `OtherCashierSalesNotice.tsx`, `CartSlider.tsx`
+- `src/components/offline/OfflineReadGuard.tsx`, `src/pages/SyncIssuesPage.tsx`, `src/test/offlineReadGuardRender.tsx`
+- `AGENTS.md`, `roadmap.md`, `OFFLINE_POS.md`; project memory adds the owner-approved offline field scope.
+
+Protected client and all backend files/settings unchanged. Existing online mutation paths remain intact; reads include server updated_at for safe offline edits.
