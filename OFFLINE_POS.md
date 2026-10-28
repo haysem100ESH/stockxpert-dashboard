@@ -178,3 +178,59 @@ Earlier simulated sign-out checks described export-gated deletion; that behavior
 - Not available offline: edge-function reads, read RPCs, realtime updates (resume on reconnect), and datasets never opened online on this PC. On reconnect, visible data refreshes in the background.
 
 Phase 1 verification: full `bun test` passed **164 tests, 0 failures, 511 assertions across 13 files**; production `vite build` succeeded. A Bun preload (`bunfig.toml` → `src/test/setupIndexedDb.ts`) now installs fake IndexedDB before Dexie loads. No device/browser offline verification was performed.
+
+
+## Offline records Phase 2
+
+Frontend-only: no migrations, SQL, RLS, function deployments, or protected client changes.
+
+### Enabled offline controls
+
+| Page | Controls | Allowed fields | Still internet-only |
+| --- | --- | --- | --- |
+| Customers | Add Customer, Edit, their submit buttons | name, phone, notes | credit limit, opening balance, payments, deletes, merges |
+| Suppliers | Add Supplier, Edit, their submit buttons (including staff with cached edit permission offline) | name, contact_person, phone, email, address | purchases, payments, deletes, balances |
+| Medicine Codes | New Code, Edit, Save | create: code, label, notes; edit: label, notes | code text on edit, assignments, deletes, merges |
+
+Owners may edit; staff require previously verified cached edit permission (`customers`, `suppliers`, `inventory` respectively). Cached branch/profile/subscription checks fail closed and the server always revalidates. A specific allowed branch is required. Creates use device UUIDs; updates send changed allowed fields only and preserve the exact cached server `updated_at`. An older cached medicine-code record without updated_at must be loaded online before editing. Required names/labels, 200-character name/label, 30-character phone, 2000-character notes, 50-character code and email validation run locally. Cached duplicates warn without blocking; server decides.
+
+Dexie **version 4** adds `ops` with key `opId` and indexes userId, branchId, entityId, status, deviceCreatedAt; existing sales/catalog/meta/readCache data is preserved. Ops retain original payload, IDs, base version, previous-op ID, device time, attempts/backoff, server result details and discard audit. The single existing POS-locked syncing loop interleaves sales and ops oldest-first, one at a time. Earlier unresolved entity operations are chained; blocked dependents are not sent, become DEPENDS_ON_UNSYNCED when their predecessor needs attention/is discarded, and are re-evaluated after resolution. Unknown outcomes retain immutable requests and the existing backoff/error classifier.
+
+User-only overlays add provisional rows/badges to cached list reads and customer/supplier/code views, search and the sales customer picker. Stored readCache snapshots are not amended. Synced ops disappear into refreshed server data; discarded edits do not overwrite server fields. Discarded creates remain in Waiting to sync / Activity audit, not as usable records. Other-user ops are count-only in the Sales notice. No credit behavior is changed.
+
+### Device and owner resolution
+
+- Header pending/attention counts include sales and ops. **Waiting to sync** has Sales / Records tabs.
+- Records: pending Retry; local rejection/DEPENDS_ON_UNSYNCED Retry or Discard with required note. Server issues say **Waiting for owner review**, never local discard.
+- Owner **Sync issues → Records**, online only, reads needs_attention operations for allowed branches using existing server authorization. Shows submitter/time/branch, changed fields, server/offline comparison for version conflicts, and duplicate links. Retry; Keep offline change only for VERSION_CONFLICT/DUPLICATE_PHONE/DUPLICATE_NAME; Void requires a note.
+- Cashier reconnect reads owner decisions: applied becomes synced; voided remains auditable as **Voided by owner: note**. Server creates activities; no client logging is sent for outbox operations. Pending Activity Center rows cover all six record operation types and deduplicate server client_txn_id/metadata.op_id. Goals still use server counts only.
+- Backup format **v2** contains own sales and ops, including confirmed chain predecessors. Restore accepts v1 and v2, remains same-user, skips IDs already present, preserves synced ancestors (without sending them again), and resumes unresolved ops with original IDs/payloads. Export includes ops. Normal sign-out retains every op; explicit removal checks current export coverage for unresolved/discarded ops under the POS lock and removes only this user's data.
+
+### Verification and limitations
+
+No authenticated server, browser/device, real filesystem, or installed-app offline verification is claimed. DOM tests use happy-dom and mocked identity/backend responses; RPC tests simulate the contract. Duplicate links navigate to the matching page with the existing record ID in its query string; record-specific focusing depends on that page. Old snapshots without server updated_at cannot safely support updates until refreshed online. Automatic production compilation is reported separately; manual builds are disabled by the workspace harness.
+
+Initial full-suite failure output (corrected):
+```text
+ReferenceError: location is not defined
+      at brokeredPreviewStorage (/dev-server/src/integrations/supabase/previewAuthStorage.ts:43:16)
+error: expect(received).toEqual(expected)
+- [{ "id": "customers-1", "name": "customers" }]
++ []
+error: expect(received).toEqual(expected)
+- [{ "id": "c1" }]
++ []
+```
+DOM setup also initially failed with:
+```text
+TypeError: Argument 1 ('event') to EventTarget.dispatchEvent must be an instance of Event
+ code: "ERR_INVALID_ARG_TYPE"
+ReferenceError: ResizeObserver is not defined
+AssertionError: Expected values to be strictly equal:
+3 !== 0
+```
+The cache correction preserves already-server-filtered projected rows; the DOM correction uses isolated browser globals and counts writes rather than permitted read queries. Expanded six-submission DOM test timeout was raised:
+```text
+(fail) offline customer, supplier and medicine code forms send only allowed fields; credit/code edits and read permission block writes [5011.70ms]
+  ^ this test timed out after 5000ms.
+```
