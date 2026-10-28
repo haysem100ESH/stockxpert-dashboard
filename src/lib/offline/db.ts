@@ -1,12 +1,14 @@
 import Dexie, { type Table } from 'dexie';
 import type { CatalogItem, LocalSale } from './types';
 import type { ReadCacheEntry } from './readCache';
+import type { LocalOp } from './opTypes';
 
 export class OfflineDatabase extends Dexie {
   declare catalog: Table<CatalogItem, string>;
   declare sales: Table<LocalSale, string>;
   declare meta: Table<{ key: string; value: unknown }, string>;
   declare readCache: Table<ReadCacheEntry, [string, string, string]>;
+  declare ops: Table<LocalOp, string>;
   constructor(name = 'pharmaxpert-offline') {
     super(name);
     this.version(1).stores({
@@ -26,6 +28,13 @@ export class OfflineDatabase extends Dexie {
       sales: 'clientTxnId, status, branchId, userId, createdAt',
       meta: 'key',
       readCache: '[userId+scopeKey+queryKey], userId, [userId+path]',
+    });
+    this.version(4).stores({
+      catalog: 'id, branchId, ownerKey',
+      sales: 'clientTxnId, status, branchId, userId, createdAt',
+      meta: 'key',
+      readCache: '[userId+scopeKey+queryKey], userId, [userId+path]',
+      ops: 'opId, userId, branchId, entityId, status, deviceCreatedAt',
     });
   }
 }

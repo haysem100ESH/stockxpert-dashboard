@@ -1,3 +1,4 @@
+import { useRecordOverlay } from './useOfflineRecords';
 /**
  * useSalesInventory
  * ----------------------------------------------------------------------------
@@ -233,9 +234,10 @@ export function useSalesInventory() {
     return () => { (supabase as any).removeChannel(channel); };
   }, [enabled, reachable, scopeKey, queryClient, refresh]);
 
+  const customers = useRecordOverlay(customersQuery.data ?? [], 'customer');
   return {
     medicines, packagingMap, cachedAt, catalogError,
-    customers: reachable ? customersQuery.data ?? [] : [],
+    customers: reachable ? customers : [],
     loading: localLoading || (reachable && !cachedAt && ownerBranchesLoading),
     isFetching: customersQuery.isFetching,
     refetchMedicines: refresh,

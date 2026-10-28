@@ -17,8 +17,10 @@ export function useOfflineBackup() {
     const scheduler = createBackupScheduler(() => runBackup(userId));
     void scheduler.flush();
     let first = true;
-    const sub = liveQuery(async () => (await offlineDb.sales.where('userId').equals(userId).toArray())
-      .map(r => `${r.clientTxnId}:${r.status}:${r.updatedAt}`).join('|'))
+    const sub = liveQuery(async () => [
+      ...(await offlineDb.sales.where('userId').equals(userId).toArray()).map(r => `${r.clientTxnId}:${r.status}:${r.updatedAt}`),
+      ...(await offlineDb.ops.where('userId').equals(userId).toArray()).map(o => `${o.opId}:${o.status}:${o.updatedAt}`),
+    ].join('|'))
       .subscribe({ next: () => { if (first) { first = false; return; } scheduler.schedule(); }, error: () => {} });
     const now = () => { void scheduler.flush(); };
     window.addEventListener('pos:backup-now', now);

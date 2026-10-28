@@ -1,10 +1,11 @@
+import { exportOp, unresolvedOp, type LocalOp } from './opTypes';
 import { offlineDb } from './db';
 import type { LocalSale } from './types';
 import { withPosLock } from './network';
 
 export const isUnresolved = (sale: LocalSale) => ['pending', 'syncing', 'needs_attention', 'discarded'].includes(sale.status);
-export function exportFingerprint(records: LocalSale[]) {
-  return records.filter(isUnresolved).map(r => `${r.clientTxnId}:${r.updatedAt}:${r.status}`).sort().join('|');
+export function exportFingerprint(records: LocalSale[], ops: LocalOp[] = []) {
+  return [...records.filter(isUnresolved).map(r => `${r.clientTxnId}:${r.updatedAt}:${r.status}`), ...ops.filter(unresolvedOp).map(o => `op:${o.opId}:${o.updatedAt}:${o.status}`)].sort().join('|');
 }
 export async function userSales(userId: string) {
   return (await offlineDb.sales.where('userId').equals(userId).sortBy('createdAt')).reverse();
@@ -22,19 +23,21 @@ export function exportRecord(r: LocalSale): ExportedSale {
   for (const key of EXPORT_FIELDS) out[key] = r[key];
   return out as ExportedSale;
 }
-export function exportDocument(records: LocalSale[], userId: string) {
-  return { format: 'pharmaxpert-pos-export', version: 1, exportedAt: new Date().toISOString(),
+export function exportDocument(records: LocalSale[], userId: string, ops: LocalOp[] = []) {
+  return { format: 'pharmaxpert-pos-export', version: 2, exportedAt: new Date().toISOString(),
+    // Include confirmed predecessors so exports remain a complete recovery chain.
+    userId, ops: ops.filter(o => o.userId === userId).map(exportOp),
     sales: records.filter(r => r.userId === userId && isUnresolved(r)).map(exportRecord) };
 }
 export async function exportPendingSales(userId: string): Promise<string> {
-  const records = await userSales(userId);
-  const blob = new Blob([JSON.stringify(exportDocument(records, userId), null, 2)], { type: 'application/json' });
+  const { records, ops } = await withPosLock(() => offlineDb.transaction('r', offlineDb.sales, offlineDb.ops, async () => ({ records: await userSales(userId), ops: await offlineDb.ops.where('userId').equals(userId).toArray() })));
+  const blob = new Blob([JSON.stringify(exportDocument(records, userId, ops), null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a'); link.href = url;
   link.download = `pending-sales-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
   document.body.appendChild(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
-  return exportFingerprint(records);
+  return exportFingerprint(records, ops);
 }
 export async function retryUserSales(userId: string, txnId?: string) {
   await withPosLock(() => offlineDb.sales.where('userId').equals(userId)
@@ -52,14 +55,16 @@ export async function discardUserSale(userId: string, txnId: string, note: strin
 }
 /** Explicit retirement only. Caller holds the POS lock through cleanup and sign-out. */
 export async function clearUserDeviceData(userId: string, exported?: string) {
-  await offlineDb.transaction('rw', [offlineDb.sales, offlineDb.catalog, offlineDb.meta, offlineDb.readCache], async () => {
+  await offlineDb.transaction('rw', [offlineDb.sales, offlineDb.catalog, offlineDb.meta, offlineDb.readCache, offlineDb.ops], async () => {
     const records = await userSales(userId);
-    if (records.some(isUnresolved) && exported !== exportFingerprint(records)) {
-      throw new Error('Export the current pending sales before signing out.');
+    const ops = await offlineDb.ops.where('userId').equals(userId).toArray();
+    if ((records.some(isUnresolved) || ops.some(unresolvedOp)) && exported !== exportFingerprint(records, ops)) {
+      throw new Error('Export the current waiting sales and records before removing your data.');
     }
     await offlineDb.catalog.where('ownerKey').equals(userId).delete();
     await offlineDb.meta.filter(row => row.key.split(':').includes(userId)).delete();
     await offlineDb.sales.where('userId').equals(userId).delete();
     await offlineDb.readCache.where('userId').equals(userId).delete();
+    await offlineDb.ops.where('userId').equals(userId).delete();
   });
 }

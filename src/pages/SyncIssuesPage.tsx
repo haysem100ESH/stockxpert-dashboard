@@ -1,3 +1,4 @@
+import RecordSyncIssues from '@/components/offline/RecordSyncIssues';
 import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -33,8 +34,8 @@ export default function SyncIssuesPage() {
   };
   return <section className="mx-auto max-w-6xl space-y-5">
     <div className="flex justify-between items-center gap-3"><h1 className="text-2xl font-bold">Sync issues</h1><Button variant="outline" size="icon" title="Refresh issues" aria-label="Refresh issues" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw className="h-4 w-4" /></Button></div>
-    <Tabs value={tab} onValueChange={setTab}><TabsList><TabsTrigger value="open">Open</TabsTrigger><TabsTrigger value="history">Resolved / voided</TabsTrigger></TabsList></Tabs>
-    {query.isLoading ? <p className="text-muted-foreground">Loading…</p> : query.isError ? <p role="alert" className="text-destructive">Could not load sync issues. Refresh to try again.</p> : !query.data?.length ? <p className="text-muted-foreground">{tab === 'open' ? 'No open sync issues.' : 'No resolved or voided issues.'}</p> : <div className="space-y-3">{query.data.map(issue => <article key={issue.id} className="border rounded-md p-4 space-y-3">
+    <Tabs value={tab} onValueChange={setTab}><TabsList><TabsTrigger value="open">Sales</TabsTrigger><TabsTrigger value="records">Records</TabsTrigger><TabsTrigger value="history">Resolved / voided</TabsTrigger></TabsList></Tabs>
+    {tab === 'records' ? <RecordSyncIssues /> : query.isLoading ? <p className="text-muted-foreground">Loading…</p> : query.isError ? <p role="alert" className="text-destructive">Could not load sync issues. Refresh to try again.</p> : !query.data?.length ? <p className="text-muted-foreground">{tab === 'open' ? 'No open sync issues.' : 'No resolved or voided issues.'}</p> : <div className="space-y-3">{query.data.map(issue => <article key={issue.id} className="border rounded-md p-4 space-y-3">
       <div className="flex flex-wrap justify-between gap-2"><div><h2 className="font-semibold break-words">{issue.branchName || issue.branch_id}</h2><p className="text-xs text-muted-foreground break-words">{issue.submitterName || issue.submitted_by} · {new Date(issue.created_at).toLocaleString()} · {issue.payload?.client_txn_id?.slice(0, 8)}</p></div><Badge variant={issue.status === 'open' ? 'destructive' : 'secondary'}>{issue.status === 'open' ? 'Needs attention' : issue.status === 'voided' ? 'Voided by owner' : 'Resolved'}</Badge></div>
       <p className="text-sm">{reasonMessage(issue.reason_code, issue.reason_detail)}</p>
       {issue.reason_detail && <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">{Object.entries(issue.reason_detail).map(([key, value]) => <div key={key} className="break-all"><dt className="inline font-medium">{key.replace(/_/g, ' ')}: </dt><dd className="inline">{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>}

@@ -1,3 +1,4 @@
+import { useOfflineRecordForm } from '@/hooks/useOfflineRecords';
 import { useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -28,10 +29,22 @@ export default function AddCustomerDialog({ open, onOpenChange, onCustomerAdded 
   const { profile } = useAuth();
   const { selectedBranch } = useBranchContext();
   const { toast } = useToast();
+  const offlineForm = useOfflineRecordForm('customer');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    if (await offlineForm.shouldSaveOffline()) {
+      setLoading(true);
+      try {
+        const { warning } = await offlineForm.save({ name, phone, notes });
+        toast({ title: 'Saved on this PC', description: warning });
+        setName(''); setPhone(''); setNotes(''); onOpenChange(false); onCustomerAdded();
+      } catch (error) { toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Please try again.', variant: 'destructive' }); }
+      finally { setLoading(false); }
+      return;
+    }
+
 
     let maxLimit: number | null;
     if (limitMode === 'auto') maxLimit = null;
@@ -70,7 +83,7 @@ export default function AddCustomerDialog({ open, onOpenChange, onCustomerAdded 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px] max-h-[90vh] overflow-y-auto">
+      <DialogContent data-offline-allow={offlineForm.offlineAllowed || undefined} className="sm:max-w-[480px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add Customer</DialogTitle>
           <DialogDescription>Add a new customer to track purchases and debts.</DialogDescription>
@@ -91,7 +104,7 @@ export default function AddCustomerDialog({ open, onOpenChange, onCustomerAdded 
 
           <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
             <Label className="text-sm font-semibold">Credit Limit</Label>
-            <RadioGroup value={limitMode} onValueChange={(v) => setLimitMode(v as CreditLimitMode)} className="space-y-1.5">
+            <RadioGroup disabled={!offlineForm.reachable} title={!offlineForm.reachable ? "Needs internet" : undefined} value={limitMode} onValueChange={(v) => setLimitMode(v as CreditLimitMode)} className="space-y-1.5">
               <div className="flex items-center gap-2">
                 <RadioGroupItem value="auto" id="cap-auto" />
                 <Label htmlFor="cap-auto" className="text-sm cursor-pointer font-normal">Auto (based on credit score)</Label>
@@ -107,7 +120,7 @@ export default function AddCustomerDialog({ open, onOpenChange, onCustomerAdded 
             </RadioGroup>
             {limitMode === 'custom' && (
               <Input
-                type="number" min="0" step="0.01"
+                disabled={!offlineForm.reachable} title={!offlineForm.reachable ? "Needs internet" : undefined} type="number" min="0" step="0.01"
                 value={customLimit}
                 onChange={e => setCustomLimit(e.target.value)}
                 placeholder="e.g. 7500"
@@ -118,7 +131,7 @@ export default function AddCustomerDialog({ open, onOpenChange, onCustomerAdded 
 
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={loading}>{loading ? 'Adding...' : 'Add Customer'}</Button>
+            <Button type="submit" disabled={loading || (!offlineForm.reachable && !offlineForm.canEdit)}>{loading ? 'Adding...' : 'Add Customer'}</Button>
           </div>
         </form>
       </DialogContent>

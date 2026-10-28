@@ -1,3 +1,4 @@
+import { useOfflineRecordForm, useRecordOverlay } from '@/hooks/useOfflineRecords';
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,7 @@ interface Supplier {
   email?: string;
   address?: string;
   created_at: string;
+  offlineBadge?: string;
 }
 
 export default function SupplierManagement() {
@@ -51,22 +53,25 @@ export default function SupplierManagement() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const readOnly = useReadOnly();
+  const offlineForm = useOfflineRecordForm('supplier');
+  const visibleSuppliers = useRecordOverlay(suppliers, 'supplier');
   const { selectedBranch } = useBranchContext();
   const { branchIds: ownerBranchIds } = useOwnerBranchIds();
   
   const itemsPerPage = 15;
 
   useEffect(() => { fetchSuppliers(); }, [selectedBranch, profile?.id, ownerBranchIds.join(',')]);
+  useEffect(() => { const refresh = () => { void fetchSuppliers(); }; window.addEventListener('app:refresh', refresh); return () => window.removeEventListener('app:refresh', refresh); }, [selectedBranch, profile?.id, ownerBranchIds.join(',')]);
 
   useEffect(() => {
-    const filtered = suppliers.filter(supplier =>
+    const filtered = visibleSuppliers.filter(supplier =>
       supplier.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       supplier.contact_person?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       supplier.email?.toLowerCase().includes(searchTerm.toLowerCase())
     );
     setFilteredSuppliers(filtered);
     setCurrentPage(1);
-  }, [suppliers, searchTerm]);
+  }, [JSON.stringify(visibleSuppliers), searchTerm]);
 
   useEffect(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -151,8 +156,8 @@ export default function SupplierManagement() {
               <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input placeholder="Search suppliers..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-8" />
             </div>
-            {profile?.role === 'owner' && !readOnly && (
-              <Button onClick={() => setShowAddDialog(true)}><Plus className="h-4 w-4 mr-2" />Add Supplier</Button>
+            {(profile?.role === 'owner' || offlineForm.offlineAllowed) && !readOnly && (
+              <Button data-offline-allow={offlineForm.offlineAllowed || undefined} disabled={!offlineForm.reachable && !offlineForm.canEdit} onClick={() => setShowAddDialog(true)}><Plus className="h-4 w-4 mr-2" />Add Supplier</Button>
             )}
           </div>
 
@@ -164,7 +169,7 @@ export default function SupplierManagement() {
                     <div className="flex items-center space-x-2">
                       <Truck className="h-5 w-5 text-primary" />
                       <div>
-                        <CardTitle className="text-lg">{supplier.name}</CardTitle>
+                        <CardTitle className="text-lg">{supplier.name}</CardTitle>{supplier.offlineBadge && <Badge variant="secondary">{supplier.offlineBadge}</Badge>}
                         {supplier.contact_person && (
                           <CardDescription className="flex items-center space-x-1 mt-1">
                             <User className="h-3 w-3" /><span>{supplier.contact_person}</span>
@@ -191,7 +196,7 @@ export default function SupplierManagement() {
                           <FileText className="h-4 w-4 mr-2" /> View Ledger
                         </DropdownMenuItem>
                         {!readOnly && (
-                          <DropdownMenuItem onClick={() => handleEditSupplier(supplier)}>
+                          <DropdownMenuItem data-offline-allow={offlineForm.offlineAllowed || undefined} disabled={!offlineForm.reachable && !offlineForm.canEdit} onClick={() => handleEditSupplier(supplier)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit
                           </DropdownMenuItem>
                         )}

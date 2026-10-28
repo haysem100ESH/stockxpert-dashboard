@@ -267,7 +267,7 @@ export function createReadCacheFetch(base: FetchLike): FetchLike {
     const serve = async () => {
       const cached = await readCachedResponse(userId, scopeKey, req).catch(() => null);
       if (cached) record('hit', cached.savedAt); else record('miss');
-      return cached ? toResponse(cached) : null;
+      return cached ? toResponse({ ...cached, body: await overlayCachedBody(cached.body, req, userId, scopeKey) }) : null;
     };
     if (!getOfflineState().reachable) {
       const hit = await serve();
@@ -295,4 +295,32 @@ export function installReadCache(client: { rest?: { fetch?: FetchLike } }) {
   if (!rest?.fetch || rest.__offlineReadCache) return;
   rest.fetch = createReadCacheFetch(rest.fetch.bind(rest));
   rest.__offlineReadCache = true;
+}
+
+/** Overlay only record table reads, never financial joins, other users, or stored snapshots. */
+export async function overlayCachedBody(body: string | null, req: ReadRequest, userId: string, scopeKey: string) {
+  if (!body || req.method !== 'GET') return body;
+  const { entityForPath, overlayRecords } = await import('./ops');
+  const entity = entityForPath(req.path); if (!entity) return body;
+  let parsed: unknown; try { parsed = JSON.parse(body); } catch { return body; }
+  const object = !Array.isArray(parsed);
+  if (!parsed || typeof parsed !== 'object') return body;
+  const source = (Array.isArray(parsed) ? parsed : [parsed]) as Record<string, unknown>[];
+  if (source.some(r => typeof r.id !== 'string')) return body;
+  const ops = (await offlineDb.ops.where('userId').equals(userId).toArray()).filter(o => o.entityType === entity && o.status !== 'synced');
+  if (!ops.length) return body;
+  let rows = overlayRecords(source as { id: string }[], ops, userId, entity,
+    scopeKey === 'owner-all' || scopeKey === 'global' ? undefined : [scopeKey]) as Record<string, unknown>[];
+  for (const f of req.filters) {
+    const eq = f.indexOf('='); const column = f.slice(0, eq);
+    // Medicine codes belong to the owner; local rows are already allowed/user-scoped.
+    if (column === 'owner_id' && entity === 'medicine_code') continue;
+    const pred = compileCondition(column, f.slice(eq + 1)); if (!pred) return body;
+    // Existing cached rows were already filtered by the server, even when the
+    // projected response omits the filter column. Re-filter only local rows.
+    rows = rows.filter(row => source.some(s => s.id === row.id) && !ops.some(o => o.entityId === row.id) || pred(row));
+  }
+  rows = applyOrder(rows, req.order) ?? rows;
+  if (object) return rows.length === 1 ? JSON.stringify(rows[0]) : body;
+  return JSON.stringify(rows);
 }

@@ -1,3 +1,5 @@
+import { offlineDb } from '@/lib/offline/db';
+import { unresolvedOp } from '@/lib/offline/opTypes';
 import { useEffect, useState } from 'react';
 import { liveQuery } from 'dexie';
 import { LogOut } from 'lucide-react';
@@ -14,12 +16,12 @@ export default function DeviceSignOutDialog({ userId, open, onOpenChange, onConf
   useEffect(() => {
     if (!open) return;
     setCount(0); setError('');
-    const sub = liveQuery(() => userSales(userId)).subscribe({ next: records => setCount(records.filter(isUnresolved).length), error: () => setError('Could not read saved sales. Signing out will not delete them.') });
+    const sub = liveQuery(async () => (await userSales(userId)).filter(isUnresolved).length + (await offlineDb.ops.where('userId').equals(userId).toArray()).filter(unresolvedOp).length).subscribe({ next: setCount, error: () => setError('Could not read saved sales. Signing out will not delete them.') });
     return () => sub.unsubscribe();
   }, [userId, open]);
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}><DialogContent data-offline-allow>
     <DialogHeader><DialogTitle>Sign out</DialogTitle><DialogDescription>{count
-      ? `${count} sales are saved on this PC and are kept after you sign out. They will sync automatically the next time you sign in on this PC with internet.`
+      ? `${count} sales and record changes are saved on this PC and are kept after you sign out. They will sync automatically the next time you sign in on this PC with internet.`
       : 'You will need internet to sign in again. Saved sales and prices stay on this PC.'}</DialogDescription></DialogHeader>
     {!reachable && <p className="text-sm text-destructive">You are offline. If you sign out now, nobody can sign in or make sales on this PC until the internet is back.</p>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

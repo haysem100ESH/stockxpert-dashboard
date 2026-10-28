@@ -1,5 +1,12 @@
 # Offline POS — part 1
 
+## Offline records Phase 2
+- [x] Durable ops, shared ordered sync, chaining and overlay
+- [x] Limited offline forms with cached edit permission
+- [x] Device/owner resolution, pending activity and header counts
+- [x] Backup v2/v1 restore, export and retirement coverage
+- [x] Full Bun suite: 192 pass, 0 fail, 614 assertions; automatic build OK; manual production build unavailable; no device verification
+
 ## Offline Activity Center and atomic sale activity
 - [x] Flag new payloads and preserve legacy logging and credit effects
 - [x] Cache loaded activity feeds, counts, goals and owner views per user; show local pending rows without duplication

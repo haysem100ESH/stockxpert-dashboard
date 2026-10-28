@@ -178,3 +178,88 @@ Earlier simulated sign-out checks described export-gated deletion; that behavior
 - Not available offline: edge-function reads, read RPCs, realtime updates (resume on reconnect), and datasets never opened online on this PC. On reconnect, visible data refreshes in the background.
 
 Phase 1 verification: full `bun test` passed **164 tests, 0 failures, 511 assertions across 13 files**; production `vite build` succeeded. A Bun preload (`bunfig.toml` → `src/test/setupIndexedDb.ts`) now installs fake IndexedDB before Dexie loads. No device/browser offline verification was performed.
+
+
+## Offline records Phase 2
+
+Frontend-only: no migrations, SQL, RLS, function deployments, or protected client changes.
+
+### Enabled offline controls
+
+| Page | Controls | Allowed fields | Still internet-only |
+| --- | --- | --- | --- |
+| Customers | Add Customer, Edit, their submit buttons | name, phone, notes | credit limit, opening balance, payments, deletes, merges |
+| Suppliers | Add Supplier, Edit, their submit buttons (including staff with cached edit permission offline) | name, contact_person, phone, email, address | purchases, payments, deletes, balances |
+| Medicine Codes | New Code, Edit, Save | create: code, label, notes; edit: label, notes | code text on edit, assignments, deletes, merges |
+
+Owners may edit; staff require previously verified cached edit permission (`customers`, `suppliers`, `inventory` respectively). Cached branch/profile/subscription checks fail closed and the server always revalidates. A specific allowed branch is required. Creates use device UUIDs; updates send changed allowed fields only and preserve the exact cached server `updated_at`. An older cached medicine-code record without updated_at must be loaded online before editing. Required names/labels, 200-character name/label, 30-character phone, 2000-character notes, 50-character code and email validation run locally. Cached duplicates warn without blocking; server decides.
+
+Dexie **version 4** adds `ops` with key `opId` and indexes userId, branchId, entityId, status, deviceCreatedAt; existing sales/catalog/meta/readCache data is preserved. Ops retain original payload, IDs, base version, previous-op ID, device time, attempts/backoff, server result details and discard audit. The single existing POS-locked syncing loop interleaves sales and ops oldest-first, one at a time. Earlier unresolved entity operations are chained; blocked dependents are not sent, become DEPENDS_ON_UNSYNCED when their predecessor needs attention/is discarded, and are re-evaluated after resolution. Unknown outcomes retain immutable requests and the existing backoff/error classifier.
+
+User-only overlays add provisional rows/badges to cached list reads and customer/supplier/code views, search and the sales customer picker. Stored readCache snapshots are not amended. Synced ops disappear into refreshed server data; discarded edits do not overwrite server fields. Discarded creates remain in Waiting to sync / Activity audit, not as usable records. Other-user ops are count-only in the Sales notice. No credit behavior is changed.
+
+### Device and owner resolution
+
+- Header pending/attention counts include sales and ops. **Waiting to sync** has Sales / Records tabs.
+- Records: pending Retry; local rejection/DEPENDS_ON_UNSYNCED Retry or Discard with required note. Server issues say **Waiting for owner review**, never local discard.
+- Owner **Sync issues → Records**, online only, reads needs_attention operations for allowed branches using existing server authorization. Shows submitter/time/branch, changed fields, server/offline comparison for version conflicts, and duplicate links. Retry; Keep offline change only for VERSION_CONFLICT/DUPLICATE_PHONE/DUPLICATE_NAME; Void requires a note.
+- Cashier reconnect reads owner decisions: applied becomes synced; voided remains auditable as **Voided by owner: note**. Server creates activities; no client logging is sent for outbox operations. Pending Activity Center rows cover all six record operation types and deduplicate server client_txn_id/metadata.op_id. Goals still use server counts only.
+- Backup format **v2** contains own sales and ops, including confirmed chain predecessors. Restore accepts v1 and v2, remains same-user, skips IDs already present, preserves synced ancestors (without sending them again), and resumes unresolved ops with original IDs/payloads. Export includes ops. Normal sign-out retains every op; explicit removal checks current export coverage for unresolved/discarded ops under the POS lock and removes only this user's data.
+
+### Verification and limitations
+
+No authenticated server, browser/device, real filesystem, or installed-app offline verification is claimed. DOM tests use happy-dom and mocked identity/backend responses; RPC tests simulate the contract. Duplicate links navigate to the matching page with the existing record ID in its query string; record-specific focusing depends on that page. Old snapshots without server updated_at cannot safely support updates until refreshed online. Automatic production compilation is reported separately; manual builds are disabled by the workspace harness.
+
+Initial full-suite failure output (corrected):
+```text
+ReferenceError: location is not defined
+      at brokeredPreviewStorage (/dev-server/src/integrations/supabase/previewAuthStorage.ts:43:16)
+error: expect(received).toEqual(expected)
+- [{ "id": "customers-1", "name": "customers" }]
++ []
+error: expect(received).toEqual(expected)
+- [{ "id": "c1" }]
++ []
+```
+DOM setup also initially failed with:
+```text
+TypeError: Argument 1 ('event') to EventTarget.dispatchEvent must be an instance of Event
+ code: "ERR_INVALID_ARG_TYPE"
+ReferenceError: ResizeObserver is not defined
+AssertionError: Expected values to be strictly equal:
+3 !== 0
+```
+The cache correction preserves already-server-filtered projected rows; the DOM correction uses isolated browser globals and counts writes rather than permitted read queries. Expanded six-submission DOM test timeout was raised:
+```text
+(fail) offline customer, supplier and medicine code forms send only allowed fields; credit/code edits and read permission block writes [5011.70ms]
+  ^ this test timed out after 5000ms.
+```
+
+
+### Final Phase 2 verification
+
+- Full `bun test`: **192 passed, 0 failed, 614 assertions across 16 files**. Final failures: none. Tests cover atomic writes/rollback, create→edit→edit chaining, blocked dependencies/re-evaluation, unknown-outcome immutable retry, all statuses, permanent/temporary classification, cached exact server versions, immutable snapshots, private overlays, permitted form submission fields, read-permission blocking, offline credit/code-text restrictions, backup v2/v1 restore, synced ancestor recovery, export gates, sign-out retention, owner voids and activity deduplication.
+- Latest automatic compilation: **build OK (2026-10-28T11:46:57Z)**. A separate production build was not run: manual builds/typechecks are prohibited by the workspace harness. Production-mode build verification remains unavailable, not implied by automatic compilation.
+- No live authenticated RPC/owner reconciliation, browser/device, installed PWA, or real folder verification. The rendered form checks are isolated happy-dom simulations, not device verification.
+- Restore preserves device-only refused operations as needs_attention (not automatically retried), resets interrupted syncing to pending, and retains synced ancestors. A partial/tampered backup missing an ancestor is fail-closed as DEPENDS_ON_UNSYNCED, never sent ahead of it.
+
+### Phase 2 files changed
+
+New:
+- `src/lib/offline/opTypes.ts`, `ops.ts`, `syncOp.ts`, `ops.test.ts`
+- `src/hooks/useOfflineRecords.ts`
+- `src/components/sales/PendingRecords.tsx`
+- `src/components/offline/RecordSyncIssues.tsx`, `OfflineRecordForms.test.ts`
+- `src/test/offlineRecordFormsRender.tsx`
+
+Updated:
+- `src/lib/offline/db.ts`, `store.ts`, `readCache.ts`, `readCache.test.ts`, `deviceSafety.ts`, `backup.ts`, `backup.test.ts`, `restore.ts`, `activity.ts`, `signOut.test.ts`
+- `src/hooks/useOfflineSync.ts`, `useOfflineBackup.ts`, `usePendingActivities.ts`, `useCustomers.tsx`, `useMedicineCodes.tsx`, `useSalesInventory.tsx`, `useAuth.tsx` (in-memory ops reset only)
+- `src/components/customers/AddCustomerDialog.tsx`, `EditCustomerDialog.tsx`, `CustomerManagement.tsx`, `CustomerDetailDialog.tsx`
+- `src/components/suppliers/AddSupplierDialog.tsx`, `EditSupplierDialog.tsx`, `SupplierManagement.tsx`
+- `src/components/inventory/MedicineCodes.tsx`
+- `src/components/sales/PendingSalesSheet.tsx`, `DeviceSignOutDialog.tsx`, `OtherCashierSalesNotice.tsx`, `CartSlider.tsx`
+- `src/components/offline/OfflineReadGuard.tsx`, `src/pages/SyncIssuesPage.tsx`, `src/test/offlineReadGuardRender.tsx`
+- `AGENTS.md`, `roadmap.md`, `OFFLINE_POS.md`; project memory adds the owner-approved offline field scope.
+
+Protected client and all backend files/settings unchanged. Existing online mutation paths remain intact; reads include server updated_at for safe offline edits.

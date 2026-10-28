@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { Connection, LocalSale } from './types';
+import type { LocalOp } from './opTypes';
 import type { StorageInfo } from './storageGuard';
 
 export type BackupStatus =
@@ -12,6 +13,7 @@ interface OfflineState {
   needsAttentionCount: number;
   lastSuccessfulSync?: string;
   records: LocalSale[];
+  ops: LocalOp[];
   storageError?: string;
   storage?: StorageInfo;
   backup: BackupStatus;
@@ -19,7 +21,7 @@ interface OfflineState {
 let state: OfflineState = {
   connection: typeof navigator !== 'undefined' && navigator.onLine ? 'online' : 'offline',
   reachable: typeof navigator !== 'undefined' && navigator.onLine,
-  pendingCount: 0, needsAttentionCount: 0, records: [], backup: { state: 'not_set_up' },
+  pendingCount: 0, needsAttentionCount: 0, records: [], ops: [], backup: { state: 'not_set_up' },
 };
 const listeners = new Set<() => void>();
 export const getOfflineState = () => state;

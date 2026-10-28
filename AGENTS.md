@@ -18,3 +18,5 @@
 - Serve offline page reads only through the shared read cache installed on the client's REST fetch in `src/lib/db.ts`; it is user- and branch-scoped, strips secrets, and never caches writes or RPCs, so pages need no per-page caches.
 - Classify offline-capable routes and write controls in `src/lib/offline/offlinePages.ts` and enforce them in `OfflineReadGuard`; offline gates use only cached verified values from `gates.ts` and fail closed.
 - Preload fake IndexedDB via `bunfig.toml` so Dexie never loads before the test shim.
+
+- Keep record operations in the versioned Dexie ops table, process them as work items in the existing POS-locked sync loop, and overlay private provisional fields without changing readCache snapshots; this preserves one queue engine and immutable retries.

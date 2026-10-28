@@ -1,3 +1,6 @@
+import PendingRecords from './PendingRecords';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { unresolvedOp, type LocalOp } from '@/lib/offline/opTypes';
 import { useEffect, useState } from 'react';
 import { liveQuery } from 'dexie';
 import { Download, FolderOpen, RefreshCw, Trash2, Upload } from 'lucide-react';
@@ -22,6 +25,8 @@ import type { LocalSale, SaleStatus } from '@/lib/offline/types';
 const labels: Record<SaleStatus, string> = { pending: 'Saved on device', syncing: 'Sending…', synced: 'Confirmed by server', needs_attention: 'Needs attention', voided: 'Voided by owner', discarded: 'Discarded on device' };
 export default function PendingSalesSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { user, removeMyDeviceData } = useAuth(); const { toast } = useToast();
+  const [recordTab, setRecordTab] = useState('sales');
+  const [ops, setOps] = useState<LocalOp[]>([]);
   const [records, setRecords] = useState<LocalSale[]>([]);
   const [branches, setBranches] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -42,18 +47,20 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
   };
   useEffect(() => {
     if (!user || !open) return;
-    setLoading(true); setRecords([]); setBranches({}); setExported(undefined); setRetireOpen(false);
-    const sub = liveQuery(async () => ({ records: await userSales(user.id), rows: await offlineDb.catalog.where('ownerKey').equals(user.id).toArray() }))
-      .subscribe({ next: ({ records, rows }) => { setRecordsUserId(user.id); setRecords(records); setBranches(Object.fromEntries(rows.map(r => [r.branchId, r.branch_name || r.branchId]))); setLoading(false); },
+    setLoading(true); setRecords([]); setOps([]); setBranches({}); setExported(undefined); setRetireOpen(false);
+    const sub = liveQuery(async () => ({ records: await userSales(user.id), ops: await offlineDb.ops.where('userId').equals(user.id).sortBy('deviceCreatedAt'), rows: await offlineDb.catalog.where('ownerKey').equals(user.id).toArray() }))
+      .subscribe({ next: ({ records, ops, rows }) => { setOps(ops); setRecordsUserId(user.id); setRecords(records); setBranches(Object.fromEntries(rows.map(r => [r.branchId, r.branch_name || r.branchId]))); setLoading(false); },
         error: () => { setLoading(false); toast({ title: 'Could not read device sales', variant: 'destructive' }); } });
     return () => sub.unsubscribe();
   }, [user?.id, open, toast]);
   const ownRecords = recordsUserId === user?.id ? records : [];
-  const removalBlocked = loading || recordsUserId !== user?.id || (ownRecords.some(isUnresolved) && exported !== exportFingerprint(ownRecords));
+  const ownOps = recordsUserId === user?.id ? ops : [];
+  const unresolved = ownRecords.some(isUnresolved) || ownOps.some(unresolvedOp);
+  const removalBlocked = loading || recordsUserId !== user?.id || (unresolved && exported !== exportFingerprint(ownRecords, ownOps));
   const act = async (work: () => Promise<unknown>) => { try { await work(); } catch (e) { toast({ title: 'Action failed', description: e instanceof Error ? e.message : 'Please try again.', variant: 'destructive' }); } };
   return <><Sheet open={open} onOpenChange={onOpenChange}><SheetContent data-offline-allow className="w-full sm:max-w-xl flex flex-col gap-4 p-4 sm:p-6">
-    <SheetHeader><SheetTitle>Device sales</SheetTitle><SheetDescription>Saved on device is not confirmation by the server.</SheetDescription></SheetHeader>
-    <Button variant="outline" className="self-start" onClick={() => { if (user) void act(async () => setExported(await exportPendingSales(user.id))); }}><Download className="h-4 w-4 mr-2" />Export pending sales</Button>
+    <SheetHeader><SheetTitle>Waiting to sync</SheetTitle><SheetDescription>Saved on device is not confirmation by the server.</SheetDescription></SheetHeader>
+    <Button variant="outline" className="self-start" onClick={() => { if (user) void act(async () => setExported(await exportPendingSales(user.id))); }}><Download className="h-4 w-4 mr-2" />Export waiting sales and records</Button>
     <div className="flex flex-wrap gap-2">
       {backupSupported()
         ? <Button variant="outline" onClick={() => { if (user) void act(() => setUpBackup(user.id)); }}><FolderOpen className="h-4 w-4 mr-2" />Set up automatic backup</Button>
@@ -63,7 +70,9 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
     </div>
     {backupSupported() && <p className="text-xs text-muted-foreground">Suggested folder: Documents\PharmaXpert Backup</p>}
     <p className="text-xs text-muted-foreground">Device storage used: {mb(storage?.usage)} of {mb(storage?.quota)}</p>
+    <Tabs value={recordTab} onValueChange={setRecordTab}><TabsList><TabsTrigger value="sales">Sales</TabsTrigger><TabsTrigger value="records">Records ({ownOps.filter(unresolvedOp).length})</TabsTrigger></TabsList></Tabs>
     <div className="overflow-y-auto flex-1 space-y-3">
+      {recordTab === 'records' && user ? <PendingRecords records={ownOps} userId={user.id} /> : <>
       {loading ? <p className="text-muted-foreground">Loading…</p> : !ownRecords.length ? <p className="text-muted-foreground">No sales saved on this device.</p> : ownRecords.map(r => <article key={r.clientTxnId} className="rounded-md border p-4 space-y-2">
         <div className="flex flex-wrap justify-between gap-2"><span className="font-mono text-sm">{r.clientTxnId.slice(0, 8)}</span><Badge variant={r.status === 'needs_attention' ? 'destructive' : r.status === 'synced' ? 'default' : 'secondary'}>{labels[r.status]}</Badge></div>
         <p className="text-xs text-muted-foreground break-words">{new Date(r.payload.device_created_at || r.createdAt).toLocaleString()} · {r.summary.branch_name || branches[r.branchId] || r.branchId}</p>
@@ -80,16 +89,17 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
           {r.status === 'needs_attention' && !r.issueId && <Button size="sm" variant="destructive" onClick={() => { setNote(''); setDiscardId(r.clientTxnId); }}><Trash2 className="mr-2 h-4 w-4" />Discard</Button>}
         </div>
       </article>)}
+      </>}
     </div>
     <Button variant="outline" className="self-start text-destructive" onClick={() => setRetireOpen(true)}><Trash2 className="h-4 w-4 mr-2" />Remove my data from this PC</Button>
   </SheetContent></Sheet>
     <Dialog open={retireOpen} onOpenChange={value => { if (!retireBusy) setRetireOpen(value); }}><DialogContent data-offline-allow>
-      <DialogHeader><DialogTitle>Remove my data from this PC?</DialogTitle><DialogDescription>For retiring or handing over a PC only. This deletes your saved sales, prices, account cache and backup folder connection from this PC, then signs you out. Other cashiers’ data and backup files are not deleted. You will need internet to sign in again.</DialogDescription></DialogHeader>
-      {ownRecords.some(isUnresolved) && <p className="text-sm text-destructive">Export your current unresolved sales, including discarded sales, and keep the downloaded file safe before removing your data.</p>}
+      <DialogHeader><DialogTitle>Remove my data from this PC?</DialogTitle><DialogDescription>For retiring or handing over a PC only. This deletes your saved sales, record changes, prices, account cache and backup folder connection from this PC, then signs you out. Other cashiers’ data and backup files are not deleted. You will need internet to sign in again.</DialogDescription></DialogHeader>
+      {unresolved && <p className="text-sm text-destructive">Export your current unresolved sales and record changes, including discarded records, and keep the downloaded file safe before removing your data.</p>}
       {exported && <p className="text-sm text-muted-foreground">Download requested. Verify the file is safely retained before confirming.</p>}
       <DialogFooter>
         <Button disabled={retireBusy} onClick={() => setRetireOpen(false)}>Keep my data</Button>
-        {ownRecords.some(isUnresolved) && <Button variant="outline" disabled={retireBusy} onClick={() => { if (user) void act(async () => setExported(await exportPendingSales(user.id))); }}><Download className="h-4 w-4 mr-2" />Export pending sales</Button>}
+        {unresolved && <Button variant="outline" disabled={retireBusy} onClick={() => { if (user) void act(async () => setExported(await exportPendingSales(user.id))); }}><Download className="h-4 w-4 mr-2" />Export waiting sales and records</Button>}
         <Button variant="destructive" disabled={removalBlocked || retireBusy} onClick={() => {
           if (!user) return;
           setRetireBusy(true);
@@ -111,7 +121,7 @@ export default function PendingSalesSheet({ open, onOpenChange }: { open: boolea
     <Dialog open={!!restore} onOpenChange={value => { if (!value && !restoreBusy) setRestore(undefined); }}><DialogContent data-offline-allow>
       <DialogHeader><DialogTitle>Restore {restore?.name}?</DialogTitle><DialogDescription>Only sales not already on this device are added. They will be sent to the server, which ignores any it already recorded.</DialogDescription></DialogHeader>
       {restore && <div className="text-sm space-y-1">
-        <p>Sales in file: {restore.preview.count}</p>
+        <p>Sales in file: {restore.preview.count}</p><p>Records in file: {restore.preview.records ?? 0}</p>
         <p>Dates: {restore.preview.from && restore.preview.to ? `${new Date(restore.preview.from).toLocaleString()} – ${new Date(restore.preview.to).toLocaleString()}` : '—'}</p>
         <p>Total: ETB {restore.preview.total.toFixed(2)}</p>
         <p>Statuses: {Object.entries(restore.preview.statuses).map(([k, v]) => `${labels[k as SaleStatus] ?? k}: ${v}`).join(', ') || '—'}</p>

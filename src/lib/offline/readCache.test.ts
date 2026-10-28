@@ -41,7 +41,7 @@ const offline = () => setOfflineState({ reachable: false, connection: 'offline' 
 
 beforeEach(async () => {
   await offlineDb.open();
-  await Promise.all([offlineDb.sales.clear(), offlineDb.catalog.clear(), offlineDb.meta.clear(), offlineDb.readCache.clear()]);
+  await Promise.all([offlineDb.sales.clear(), offlineDb.catalog.clear(), offlineDb.meta.clear(), offlineDb.readCache.clear(), offlineDb.ops.clear()]);
   rc.setReadUser('user'); rc.setReadScope('branch'); rc.resetReadStatus(); online(); mode = 'ok'; calls = 0; body = [];
 });
 afterAll(async () => { await offlineDb.delete(); });
