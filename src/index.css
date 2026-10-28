@@ -113,3 +113,8 @@ All colors MUST be HSL.
     max-width: 100vw;
   }
 }
+/* Offline read-only: write controls disabled with a "Needs internet" tooltip. */
+[data-offline-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
