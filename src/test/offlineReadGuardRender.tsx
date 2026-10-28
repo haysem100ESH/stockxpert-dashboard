@@ -11,7 +11,7 @@ for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 
   Object.defineProperty(globalThis, key, { configurable: true, writable: true,
     value: typeof value === 'function' && /^[a-z]/.test(key) ? value.bind(dom) : value });
 }
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true });
 
 const calls = { backup: 0, filePicker: 0, parse: 0, restore: 0, remove: 0, write: 0, submit: 0 };
 const user = { id: 'cashier' };
@@ -79,7 +79,7 @@ try {
   await act(async () => { pageWrite.click(); });
   const form = pageWrite.closest('form');
   assert.ok(form);
-  await act(async () => { form.dispatchEvent(new dom.Event('submit', { bubbles: true, cancelable: true })); });
+  await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
   assert.equal(calls.write, 0);
   assert.equal(calls.submit, 0);
 
@@ -96,7 +96,7 @@ try {
   await clickLocal(restoreLabel);
   assert.equal(calls.filePicker, 1);
   Object.defineProperty(input, 'files', { configurable: true, value: [{ name: 'backup.json', text: async () => '{}' }] });
-  await act(async () => { input.dispatchEvent(new dom.Event('change', { bubbles: true })); });
+  await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
   await flush();
   assert.equal(calls.parse, 1);
   await clickLocal(find('Confirm restore'));
