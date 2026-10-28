@@ -16,12 +16,12 @@ export default function StorageBackupIndicators() {
     : backup.state === 'paused' ? 'Backup paused — click to resume'
     : backup.state === 'failing' ? `Backup failing: ${backup.reason}`
     : backup.state === 'unsupported' ? 'Backup not supported' : 'Backup not set up';
-  return <TooltipProvider><div className="flex flex-wrap items-center gap-1 text-xs">
+  return <TooltipProvider><div data-offline-allow className="flex flex-wrap items-center gap-1 text-xs">
     <Tooltip><TooltipTrigger asChild>
       <Badge variant={protectedOk ? 'default' : 'destructive'} className={protectedOk ? 'bg-success text-success-foreground hover:bg-success' : ''}>
         {protectedOk ? 'Storage protected' : 'Storage NOT protected'}
       </Badge>
-    </TooltipTrigger><TooltipContent className="max-w-xs">{tip}</TooltipContent></Tooltip>
+    </TooltipTrigger><TooltipContent data-offline-allow className="max-w-xs">{tip}</TooltipContent></Tooltip>
     {backup.state === 'paused'
       ? <button type="button" onClick={() => void resumeBackup(user.id)}><Badge variant="destructive">{backupLabel}</Badge></button>
       : <Badge variant={backup.state === 'failing' ? 'destructive' : 'secondary'} className="max-w-[16rem] truncate" title={backupLabel}>{backupLabel}</Badge>}
