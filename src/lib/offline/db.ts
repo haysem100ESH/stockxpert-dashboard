@@ -36,6 +36,12 @@ export class OfflineDatabase extends Dexie {
       readCache: '[userId+scopeKey+queryKey], userId, [userId+path]',
       ops: 'opId, userId, branchId, entityId, status, deviceCreatedAt',
     });
+    // Optional multi-dependencies, stock item mapping and catalog batch snapshots; old payloads remain untouched.
+    this.version(5).stores({
+      catalog: 'id, branchId, ownerKey', sales: 'clientTxnId, status, branchId, userId, createdAt', meta: 'key',
+      readCache: '[userId+scopeKey+queryKey], userId, [userId+path]',
+      ops: 'opId, userId, branchId, entityId, status, deviceCreatedAt',
+    });
   }
 }
 export const offlineDb = new OfflineDatabase();

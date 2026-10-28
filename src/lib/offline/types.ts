@@ -62,6 +62,7 @@ export interface LocalSale {
   discardedAt?: string;
 }
 export interface CatalogItem extends SalesMedicine {
+  batches?: import('@/lib/batchInventory').InventoryBatch[];
   branchId: string;
   ownerKey: string;
   packaging: Packaging | null;
