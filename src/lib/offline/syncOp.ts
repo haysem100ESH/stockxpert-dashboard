@@ -4,6 +4,7 @@ import { validSession } from './network';
 import { isPermanentPosError, errorCode, errorMessage } from './errors';
 import { retryDelay } from './rules';
 import { opReason, type LocalOp, type OpResult } from './opTypes';
+import { stockItemId } from './stock';
 
 export function opRequest(op: LocalOp) {
   return { op_id: op.opId, op_type: op.opType, branch_id: op.branchId, entity_id: op.entityId, payload: op.payload,
@@ -11,13 +12,32 @@ export function opRequest(op: LocalOp) {
 }
 export async function settleOp(op: LocalOp, result: OpResult) {
   const now = new Date().toISOString();
-  await offlineDb.transaction('rw', offlineDb.ops, offlineDb.meta, async () => {
+  await offlineDb.transaction('rw', offlineDb.ops, offlineDb.meta, offlineDb.catalog, offlineDb.readCache, async () => {
+    const current = await offlineDb.ops.get(op.opId);
+    if (!current || current.status === 'synced' || current.ownerVoided) return;
+    if (result.status === 'applied' && op.entityType === 'stock') {
+      const itemId = result.branch_item_id ?? result.result?.branch_item_id ?? stockItemId(op);
+      const delta = op.opType === 'stock.receive' ? Number(op.payload.quantity) : Number(op.payload.delta);
+      const item = itemId ? await offlineDb.catalog.get(itemId) : undefined;
+      if (item?.branchId === op.branchId) {
+        const batches = item.batches ? [...item.batches] : undefined;
+        if (batches && op.opType === 'stock.receive' && !batches.some(b => b.id === op.entityId)) batches.push({ id: op.entityId, branch_id: op.branchId, branch_item_id: item.id, medicine_id: item.medicine_id,
+          quantity: delta, remaining_quantity: delta, purchase_price: Number(op.payload.purchase_price ?? 0), selling_price: Number(op.payload.selling_price),
+          expiry_date: op.payload.expiry_date as string ?? null, batch_number: op.payload.batch_number as string ?? null, supplier_id: op.payload.supplier_id as string ?? null, created_at: op.deviceCreatedAt, created_by: op.userId });
+        else if (batches) { const batch = batches.find(b => b.id === op.entityId); if (batch) batch.remaining_quantity = Math.max(0, batch.remaining_quantity + delta); }
+        await offlineDb.catalog.update(item.id, { serverAvailable: Math.max(0, item.serverAvailable + delta), batches });
+      }
+      // Remove stale read snapshots rather than persisting provisional fields into the read cache.
+      // A subsequent visible online read must refresh before these pages can be served offline again.
+      await offlineDb.readCache.filter(e => ['inventory_batches', 'branch_items'].some(t => e.path === `/rest/v1/${t}`)
+        && (e.scopeKey === op.branchId || e.scopeKey === 'owner-all' || e.scopeKey === 'global')).delete();
+    }
     await offlineDb.ops.update(op.opId, result.status === 'applied'
       ? { status: 'synced', serverUpdatedAt: result.updated_at, lastError: undefined, reasonCode: undefined, serverIssue: false, updatedAt: now }
       : result.status === 'voided'
         ? { status: 'discarded', ownerVoided: true, serverIssue: true, discardNote: result.resolution_note ?? '', discardedAt: now, reasonCode: 'VOIDED_BY_OWNER', updatedAt: now }
-        : { status: 'needs_attention', reasonCode: result.reason_code, details: result.details,
-          lastError: typeof result.reason_detail === 'string' ? result.reason_detail : opReason(result.reason_code), serverIssue: result.status === 'needs_attention', updatedAt: now });
+        : { status: 'needs_attention', reasonCode: result.reason_code, details: result.details ?? (typeof result.reason_detail === 'object' ? result.reason_detail as Record<string, unknown> : undefined),
+          lastError: typeof result.reason_detail === 'string' ? result.reason_detail : opReason(result.reason_code, result.details ?? result.reason_detail as Record<string, unknown>), serverIssue: result.status === 'needs_attention', updatedAt: now });
     if (result.status === 'applied') await offlineDb.meta.put({ key: `lastSuccessfulSync:${op.userId}`, value: now });
   });
 }
@@ -29,8 +49,8 @@ export async function syncOp(op: LocalOp, deps = {
     finally { clearTimeout(timer); }
   }, sessionValid: () => validSession(op.userId),
 }): Promise<OpResult | undefined> {
-  if (op.prevOpId) {
-    const previous = await offlineDb.ops.get(op.prevOpId);
+  for (const id of [...new Set([...(op.dependsOn ?? []), ...(op.prevOpId ? [op.prevOpId] : [])])]) {
+    const previous = await offlineDb.ops.get(id);
     if (!previous || previous.userId !== op.userId || previous.status !== 'synced') {
       if (!previous || ['needs_attention', 'discarded'].includes(previous.status)) await offlineDb.ops.update(op.opId,
         { status: 'needs_attention', reasonCode: 'DEPENDS_ON_UNSYNCED', serverIssue: false, lastError: opReason('DEPENDS_ON_UNSYNCED'), updatedAt: new Date().toISOString() });
@@ -56,7 +76,9 @@ export async function recoverUserOps(userId: string) {
   await offlineDb.ops.where('userId').equals(userId).and(o => o.status === 'syncing').modify({ status: 'pending', nextAttemptAt: Date.now() });
 }
 export async function dependencyReady(op: LocalOp) {
-  if (!op.prevOpId) return true;
-  const prev = await offlineDb.ops.get(op.prevOpId);
-  return prev?.userId === op.userId && prev.status === 'synced';
+  for (const id of [...new Set([...(op.dependsOn ?? []), ...(op.prevOpId ? [op.prevOpId] : [])])]) {
+    const prev = await offlineDb.ops.get(id);
+    if (prev?.userId !== op.userId || prev.branchId !== op.branchId || prev.status !== 'synced') return false;
+  }
+  return true;
 }

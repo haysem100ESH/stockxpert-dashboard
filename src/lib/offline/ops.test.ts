@@ -135,8 +135,8 @@ test('same-user recovery resets only own syncing ops and persists through databa
   expect((await offlineDb.ops.get(op.opId))?.status).toBe('pending'); expect((await offlineDb.ops.get('other'))?.status).toBe('syncing');
   await syncOp(op, reply({ status: 'applied' })); expect((await offlineDb.ops.get(op.opId))?.status).toBe('synced');
 });
-test('Dexie v4 table coexists with all earlier stores', async () => {
-  const db = new OfflineDatabase('phase2-schema-test'); await db.open(); expect(db.verno).toBe(4);
+test('Dexie v5 table coexists with all earlier stores', async () => {
+  const db = new OfflineDatabase('phase2-schema-test'); await db.open(); expect(db.verno).toBe(5);
   expect(db.tables.map(t => t.name).sort()).toEqual(['catalog', 'meta', 'ops', 'readCache', 'sales']); await db.delete();
 });
 test('cached server updated_at is preserved exactly through chained edits and read overlay does not overwrite the snapshot', async () => {

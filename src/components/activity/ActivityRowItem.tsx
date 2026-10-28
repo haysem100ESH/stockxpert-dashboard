@@ -12,6 +12,7 @@ const TYPE_META: Record<string, { label: string; icon: any; color: string }> = {
   edit_item:               { label: 'Item Edited',           icon: Pencil,         color: 'text-amber-600' },
   delete_item:             { label: 'Item Deleted',          icon: Trash2,         color: 'text-destructive' },
   adjust_stock:            { label: 'Stock Adjusted',        icon: Layers,         color: 'text-orange-600' },
+  receive_stock:           { label: 'Stock Received',        icon: Package,        color: 'text-primary' },
   create_batch:            { label: 'Batch Created',         icon: Layers,         color: 'text-blue-600' },
   edit_batch:              { label: 'Batch Edited',          icon: Layers,         color: 'text-amber-600' },
   delete_batch:            { label: 'Batch Deleted',         icon: Layers,         color: 'text-destructive' },
