@@ -8,6 +8,11 @@ export async function recoverUserQueue(userId: string) {
     .modify({ status: 'pending', nextAttemptAt: Date.now(), updatedAt: new Date().toISOString() });
 }
 
+/** Unsynced sales of ALL cashiers on this PC for these branches (stock is physical and shared). */
+export function branchReservations(branchIds: string[]) {
+  return offlineDb.sales.where('branchId').anyOf(branchIds).toArray();
+}
+
 export async function enqueueSale(record: LocalSale, validateStock: boolean) {
   await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, async () => {
     const existing = await offlineDb.sales.get(record.clientTxnId);
@@ -16,7 +21,7 @@ export async function enqueueSale(record: LocalSale, validateStock: boolean) {
       if (hasCredit(record.payload) || record.payload.customer_id) throw new Error(reasonMessage('CREDIT_NOT_ALLOWED_OFFLINE'));
       const allowed = (await offlineDb.meta.get(`branches:${record.userId}`))?.value as string[] | undefined;
       if (!allowed?.includes(record.branchId)) throw new Error(reasonMessage('BRANCH_NOT_AUTHORIZED'));
-      const reservations = await offlineDb.sales.where('branchId').equals(record.branchId).toArray();
+      const reservations = await branchReservations([record.branchId]);
       const requested = new Map<string, number>();
       for (const item of record.payload.items) {
         if (!Number.isFinite(item.base_quantity) || item.base_quantity <= 0) throw new Error(reasonMessage('INVALID_QUANTITY'));

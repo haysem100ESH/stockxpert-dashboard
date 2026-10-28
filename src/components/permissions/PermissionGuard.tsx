@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useStaffPermissions, type PageName } from '@/hooks/useStaffPermissions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ShieldAlert } from 'lucide-react';
+import { OPEN_ONCE_ONLINE } from '@/lib/offline/gates';
 
 interface PermissionGuardProps {
   page: PageName;
@@ -12,11 +13,12 @@ interface PermissionGuardProps {
 
 export default function PermissionGuard({ page, children }: PermissionGuardProps) {
   const { profile } = useAuth();
-  const { getPermission, loading } = useStaffPermissions();
+  const { getPermission, loading, uncachedOffline } = useStaffPermissions();
 
   // Owners/developers bypass
   if (!profile || profile.role !== 'staff') return <>{children}</>;
   if (loading) return null;
+  if (uncachedOffline) return <Alert className="mt-4"><ShieldAlert className="h-4 w-4" /><AlertDescription>{OPEN_ONCE_ONLINE}</AlertDescription></Alert>;
 
   const level = getPermission(page);
 

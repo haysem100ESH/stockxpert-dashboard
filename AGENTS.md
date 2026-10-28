@@ -15,3 +15,6 @@
 - Load stock reservations by branch across all cashiers, while keeping account records and sync user-scoped; physical stock stays shared after sign-out.
 - Store exact Activity Center query snapshots in user-namespaced Dexie metadata and derive provisional rows from sales; cached server counts alone drive goals, with no separate activity queue.
 - Add atomic activity fields only at new checkout construction and keep queued payloads immutable; flagged sales use server activity, while unflagged legacy sales retain duplicate-safe client effects.
+- Serve offline page reads only through the shared read cache installed on the client's REST fetch in `src/lib/db.ts`; it is user- and branch-scoped, strips secrets, and never caches writes or RPCs, so pages need no per-page caches.
+- Classify offline-capable routes and write controls in `src/lib/offline/offlinePages.ts` and enforce them in `OfflineReadGuard`; offline gates use only cached verified values from `gates.ts` and fail closed.
+- Preload fake IndexedDB via `bunfig.toml` so Dexie never loads before the test shim.

@@ -27,6 +27,11 @@ import StorageBackupIndicators from '@/components/sales/StorageBackupIndicators'
 import { useOfflineStatus } from '@/lib/offline/store';
 import OfflineStatusBadge from '@/components/sales/OfflineStatusBadge';
 import { Card, CardContent } from '@/components/ui/card';
+import OfflineReadGuard from '@/components/offline/OfflineReadGuard';
+import { offlineRouteMode, NEEDS_INTERNET_PAGE } from '@/lib/offline/offlinePages';
+import { markOffline, resetReadStatus } from '@/lib/offline/readCache';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 
 interface LayoutProps {
   children: ReactNode;
@@ -39,6 +44,19 @@ export default function Layout({ children }: LayoutProps) {
   useOfflineBackup();
   const { reachable } = useOfflineStatus();
   const location = useLocation();
+  const queryClient = useQueryClient();
+  const wasReachable = useRef(reachable);
+  // Reconnect: refresh visible data in the background (no reload); offline: remember when.
+  useEffect(() => {
+    if (!reachable) markOffline();
+    else if (!wasReachable.current) {
+      resetReadStatus();
+      void queryClient.invalidateQueries();
+      window.dispatchEvent(new Event('app:refresh'));
+    }
+    wasReachable.current = reachable;
+  }, [reachable, queryClient]);
+  const routeMode = offlineRouteMode(location.pathname);
 
   // Native-feeling pull-to-refresh on touch devices.
   usePullToRefresh(!!user);
@@ -82,7 +100,9 @@ export default function Layout({ children }: LayoutProps) {
             <main className="flex-1 overflow-x-hidden overflow-y-auto p-2 sm:p-4 max-w-full">
               {reachable && (profile?.role === 'owner' || profile?.role === 'staff') && <SubscriptionStatus />}
               {reachable && <ExpiringMedicinesAlert />}
-              {!reachable && !['/sales', '/activity', '/owner/activity'].includes(location.pathname) ? <Card><CardContent className="p-6">This page needs an internet connection</CardContent></Card> : children}
+              {!reachable && routeMode === 'online-only'
+                ? <Card><CardContent className="p-6 font-medium">{NEEDS_INTERNET_PAGE}</CardContent></Card>
+                : routeMode === 'cached' ? <OfflineReadGuard>{children}</OfflineReadGuard> : children}
             </main>
             
             {/* AI Smart Assistant */}

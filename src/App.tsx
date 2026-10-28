@@ -56,6 +56,8 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 1000 * 60 * 5, // 5 minutes
       retry: 1,
+      // Reads go through the offline read cache, so queries must run without navigator.onLine.
+      networkMode: 'always',
     },
   },
 });

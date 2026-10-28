@@ -17,7 +17,7 @@ export default function DeviceSignOutDialog({ userId, open, onOpenChange, onConf
     const sub = liveQuery(() => userSales(userId)).subscribe({ next: records => setCount(records.filter(isUnresolved).length), error: () => setError('Could not read saved sales. Signing out will not delete them.') });
     return () => sub.unsubscribe();
   }, [userId, open]);
-  return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}><DialogContent>
+  return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}><DialogContent data-offline-allow>
     <DialogHeader><DialogTitle>Sign out</DialogTitle><DialogDescription>{count
       ? `${count} sales are saved on this PC and are kept after you sign out. They will sync automatically the next time you sign in on this PC with internet.`
       : 'You will need internet to sign in again. Saved sales and prices stay on this PC.'}</DialogDescription></DialogHeader>

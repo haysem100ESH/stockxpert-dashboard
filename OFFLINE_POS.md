@@ -165,3 +165,16 @@ Earlier simulated sign-out checks described export-gated deletion; that behavior
 - `src/hooks/useAuth.tsx`, `useOfflineSync.ts`, `useSyncIssues.ts`
 - `src/lib/offline/types.ts`, `cachedSession.ts`, `deviceSafety.ts`, `reconciliation.ts`, `deviceSafety.test.ts`, `reconciliation.test.ts`
 - Project memory: `mem://features/offline-pos`
+## Offline read for main pages (Phase 1)
+
+- One shared read cache (`src/lib/offline/readCache.ts`) wraps the existing database client's table-read fetch (installed in `src/lib/db.ts`; `client.ts` untouched). Successful GET/HEAD table reads are saved to Dexie table `readCache` (database version 3, key `[userId+scopeKey+queryKey]`, scope = viewed branch or `owner-all`). Offline, or when the network throws, the saved copy is served; another user's cache is never served; HTTP errors and thrown requests never overwrite it. RPCs, writes, auth and edge functions are never cached.
+- Secret-like fields (`gemini_api_key`, any `*api_key*`, `*token*`, `*secret*`, `*password*`, security answers) are stripped before saving. Limits: 2 MB per entry, 25 MB per user with least-recently-used eviction (sales and catalog are never touched); date-ranged reads older than 30 days are not saved and expire after 30 days.
+- Offline search/filter/sort/pagination is derived locally from a complete cached list of the same table (eq/neq/gt/gte/lt/lte/like/ilike/is/in/or/and, order, offset/limit, counts, single-row).
+- In-scope offline pages: Overview, Inventory, Medicine Codes, Customers, Suppliers, Account (read-only, banner "Offline — showing data saved at HH:MM", "Not available offline — open it once while online on this PC" when something was never saved). Sales and Activity Center keep their own offline modes. Every other route shows "Needs internet — this page is not available offline."
+- Offline, write controls on in-scope pages are marked disabled ("Needs internet") and clicks/submits — including in already-open dialogs — are blocked before any request is sent.
+- Gates fail closed offline: cached profile, permissions, subscription and allowed branches only; never-verified → "Open this page once while online on this PC."; cached expired/inactive stays blocked. Owners' branch selector lists only allowed branches and disables branches never opened on this PC.
+- Inventory offline stock = cached quantity minus unsynced sales of all cashiers for that branch (shared reservation helper); expiry status recomputed daily with the Addis Ababa date.
+- Sign-out keeps the read cache; "Remove my data from this PC" deletes the current user's read cache with their other device data.
+- Not available offline: edge-function reads, read RPCs, realtime updates (resume on reconnect), and datasets never opened online on this PC. On reconnect, visible data refreshes in the background.
+
+Phase 1 verification: full `bun test` passed **164 tests, 0 failures, 511 assertions across 13 files**; production `vite build` succeeded. A Bun preload (`bunfig.toml` → `src/test/setupIndexedDb.ts`) now installs fake IndexedDB before Dexie loads. No device/browser offline verification was performed.

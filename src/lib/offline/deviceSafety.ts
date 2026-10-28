@@ -52,7 +52,7 @@ export async function discardUserSale(userId: string, txnId: string, note: strin
 }
 /** Explicit retirement only. Caller holds the POS lock through cleanup and sign-out. */
 export async function clearUserDeviceData(userId: string, exported?: string) {
-  await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, async () => {
+  await offlineDb.transaction('rw', [offlineDb.sales, offlineDb.catalog, offlineDb.meta, offlineDb.readCache], async () => {
     const records = await userSales(userId);
     if (records.some(isUnresolved) && exported !== exportFingerprint(records)) {
       throw new Error('Export the current pending sales before signing out.');
@@ -60,5 +60,6 @@ export async function clearUserDeviceData(userId: string, exported?: string) {
     await offlineDb.catalog.where('ownerKey').equals(userId).delete();
     await offlineDb.meta.filter(row => row.key.split(':').includes(userId)).delete();
     await offlineDb.sales.where('userId').equals(userId).delete();
+    await offlineDb.readCache.where('userId').equals(userId).delete();
   });
 }

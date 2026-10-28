@@ -15,6 +15,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { useBranchContext } from '@/hooks/useBranchContext';
 import { useReadOnly } from '@/hooks/useReadOnly';
 import { useBranchInventory } from '@/hooks/useBranchInventory';
+import { useOfflineStatus } from '@/lib/offline/store';
+import { useAddisToday } from '@/hooks/useAddisToday';
+import { isExpiredOn, isExpiringSoonOn } from '@/lib/offline/rules';
 import AddBranchItemDialog from './AddBranchItemDialog';
 import EditBranchItemDialog, { type BranchItem } from './EditBranchItemDialog';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
@@ -223,7 +226,11 @@ export default function StaffInventoryWithActions() {
   const getUniqueCategories = () => uniqueCategories;
   const getUniqueGroups = () => uniqueGroups;
 
+  const { reachable: isReachable } = useOfflineStatus();
+  const addisToday = useAddisToday();
   const isExpired = (item: BranchItem) => {
+    // Offline: recompute on the device daily using the Addis Ababa date.
+    if (!isReachable) return isExpiredOn(item.expiry_date, addisToday);
     if (!item.expiry_date) return false;
     const expiry = new Date(item.expiry_date);
     const today = new Date();
@@ -233,6 +240,7 @@ export default function StaffInventoryWithActions() {
   };
 
   const isExpiringSoon = (item: BranchItem) => {
+    if (!isReachable) return isExpiringSoonOn(item.expiry_date, addisToday);
     if (!item.expiry_date || isExpired(item)) return false;
     const thirtyDaysFromNow = new Date();
     thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);

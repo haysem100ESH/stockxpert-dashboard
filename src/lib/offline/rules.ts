@@ -11,6 +11,17 @@ export function availableStock(serverAvailable: number, itemId: string, records:
       .reduce((n, i) => n + i.base_quantity, 0), 0);
   return Math.max(0, Number((serverAvailable - reserved).toFixed(4)));
 }
+/** Offline inventory display: cached server quantity minus every local unsynced sale. */
+export function applyReservations<T extends { id: string; quantity: number }>(items: T[], records: LocalSale[]): T[] {
+  return items.map(item => ({ ...item, quantity: availableStock(Number(item.quantity) || 0, item.id, records) }));
+}
+/** Same semantics as the inventory page (expires on/before today), using a YYYY-MM-DD device day. */
+export const isExpiredOn = (expiry: string | null | undefined, today: string) => !!expiry && expiry.slice(0, 10) <= today;
+export function isExpiringSoonOn(expiry: string | null | undefined, today: string, days = 30) {
+  if (!expiry || isExpiredOn(expiry, today)) return false;
+  const limit = new Date(`${today}T00:00:00Z`); limit.setUTCDate(limit.getUTCDate() + days);
+  return expiry.slice(0, 10) <= limit.toISOString().slice(0, 10);
+}
 export function batchAvailable(fallback: number, batches: Array<{ remaining_quantity: number; expiry_date: string | null }>, today: string): number {
   if (!batches.length) return fallback;
   return batches.reduce((sum, b) => sum + (b.remaining_quantity > 0 && (!b.expiry_date || b.expiry_date >= today) ? Number(b.remaining_quantity) : 0), 0);

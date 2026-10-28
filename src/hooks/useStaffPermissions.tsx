@@ -3,6 +3,7 @@ import { supabase } from '@/lib/db';
 import { cacheMeta, readMeta } from '@/lib/offline/db';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { useAuth } from '@/hooks/useAuth';
+import { loadOfflinePermissions } from '@/lib/offline/gates';
 
 export type PermissionLevel = 'no_access' | 'read' | 'edit';
 
@@ -54,6 +55,8 @@ const ROUTE_TO_PAGE: Record<string, PageName> = {
 interface StaffPermissionsContextType {
   permissions: Record<PageName, PermissionLevel>;
   loading: boolean;
+  /** True when offline and this user's permissions were never verified on this PC. */
+  uncachedOffline: boolean;
   getPermission: (page: PageName) => PermissionLevel;
   getPermissionForRoute: (route: string) => PermissionLevel;
   canAccess: (page: PageName) => boolean;
@@ -74,6 +77,7 @@ export function StaffPermissionsProvider({ children }: { children: ReactNode }) 
   const { reachable } = useOfflineStatus();
   const [permissions, setPermissions] = useState<Record<PageName, PermissionLevel>>(DENIED_PERMISSIONS);
   const [loading, setLoading] = useState(true);
+  const [uncachedOffline, setUncachedOffline] = useState(false);
 
   const fetchPermissions = useCallback(async () => {
     if (!profile) {
@@ -90,8 +94,9 @@ export function StaffPermissionsProvider({ children }: { children: ReactNode }) 
 
     setLoading(true);
     const fallback = async () => {
-      const cached = await readMeta<Record<PageName, PermissionLevel>>(`permissions:${profile.id}`).catch(() => undefined);
-      setPermissions(cached ?? DENIED_PERMISSIONS);
+      const cached = await loadOfflinePermissions(profile.id, DENIED_PERMISSIONS);
+      setPermissions(cached.permissions);
+      setUncachedOffline(cached.uncached);
     };
     try {
       if (!reachable) { await fallback(); return; }
@@ -121,6 +126,7 @@ export function StaffPermissionsProvider({ children }: { children: ReactNode }) 
         }
       }
       setPermissions(merged);
+      setUncachedOffline(false);
       await cacheMeta(`permissions:${profile.id}`, merged);
     } catch (err) {
       console.error('Permission fetch error:', err);
@@ -149,6 +155,7 @@ export function StaffPermissionsProvider({ children }: { children: ReactNode }) 
     <StaffPermissionsContext.Provider value={{
       permissions,
       loading,
+      uncachedOffline,
       getPermission,
       getPermissionForRoute,
       canAccess,

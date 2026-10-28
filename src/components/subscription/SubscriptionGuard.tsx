@@ -9,6 +9,7 @@ import { AlertTriangle, Lock, Upload, CheckCircle, Loader2 } from 'lucide-react'
 import { cacheMeta, readMeta } from '@/lib/offline/db';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { useToast } from '@/hooks/use-toast';
+import { loadOfflineSubscription, OPEN_ONCE_ONLINE } from '@/lib/offline/gates';
 
 interface SubscriptionGuardProps {
   children: React.ReactNode;
@@ -19,7 +20,7 @@ export default function SubscriptionGuard({ children, fallback }: SubscriptionGu
   const { user, profile } = useAuth();
   const { reachable } = useOfflineStatus();
   const { toast } = useToast();
-  const [subscriptionStatus, setSubscriptionStatus] = useState<'active' | 'expiring_soon' | 'expired' | 'inactive' | 'loading'>('loading');
+  const [subscriptionStatus, setSubscriptionStatus] = useState<'active' | 'expiring_soon' | 'expired' | 'inactive' | 'loading' | 'uncached'>('loading');
   const [daysRemaining, setDaysRemaining] = useState<number>(0);
 
   // Payment form state
@@ -37,8 +38,9 @@ export default function SubscriptionGuard({ children, fallback }: SubscriptionGu
     const check = async () => {
       setSubscriptionStatus('loading');
       const fallback = async () => {
-        const cached = await readMeta<{ status: 'active' | 'expiring_soon' | 'expired' | 'inactive'; credit: number }>(`subscription:${id}`).catch(() => undefined);
-        if (!disposed) { setSubscriptionStatus(cached?.status ?? 'expired'); setDaysRemaining(cached?.credit ?? 0); }
+        // Fail closed: never-verified on this PC → deny; cached expired/inactive stays blocked.
+        const cached = await loadOfflineSubscription(id);
+        if (!disposed) { setSubscriptionStatus(cached.status); setDaysRemaining(cached.credit); }
       };
       if (profile.role === 'developer') { setSubscriptionStatus('active'); return; }
       if (!reachable) { await fallback(); return; }
@@ -122,6 +124,10 @@ export default function SubscriptionGuard({ children, fallback }: SubscriptionGu
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
     );
+  }
+
+  if (subscriptionStatus === 'uncached') {
+    return <Card className="max-w-lg mx-auto mt-8"><CardContent className="p-6 flex items-center gap-2"><Lock className="h-4 w-4" />{OPEN_ONCE_ONLINE}</CardContent></Card>;
   }
 
   // If subscription is expired or inactive, show blocked access with payment option

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { setReadScope } from '@/lib/offline/readCache';
 import { cacheMeta, readMeta } from '@/lib/offline/db';
 import { useOfflineStatus } from '@/lib/offline/store';
 import type { CachedBranch } from '@/lib/offline/catalog';
@@ -107,6 +108,9 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
     };
     fetchBranchType();
   }, [selectedBranch, reachable, profile?.id]);
+
+  // Offline read cache scope: the branch being viewed (owners' "All Branches" = owner-all).
+  setReadScope(selectedBranch ?? (profile?.role === 'owner' ? 'owner-all' : profile?.branch_id ?? 'global'));
 
   return (
     <BranchContext.Provider value={{ 
