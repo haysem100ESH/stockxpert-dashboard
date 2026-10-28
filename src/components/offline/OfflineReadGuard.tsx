@@ -36,6 +36,11 @@ export default function OfflineReadGuard({ children }: { children: ReactNode }) 
     const mark = () => {
       const roots = [...document.querySelectorAll('main, [role="dialog"], [role="alertdialog"], [role="menu"]')];
       for (const root of roots) for (const el of root.querySelectorAll(CONTROL_SELECTOR)) {
+        if (allowed(el) && el.hasAttribute('data-offline-disabled')) {
+          const title = el.getAttribute('data-offline-title');
+          if (title) el.setAttribute('title', title); else el.removeAttribute('title');
+          el.removeAttribute('data-offline-disabled'); el.removeAttribute('data-offline-title'); el.removeAttribute('aria-disabled');
+        }
         if (el.hasAttribute('data-offline-disabled') || allowed(el) || !isWriteControl(describe(el))) continue;
         el.setAttribute('data-offline-disabled', 'true');
         el.setAttribute('data-offline-title', el.getAttribute('title') ?? '');
@@ -45,7 +50,7 @@ export default function OfflineReadGuard({ children }: { children: ReactNode }) 
     };
     mark();
     const observer = new MutationObserver(mark);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-offline-allow'] });
     return () => {
       observer.disconnect();
       for (const el of document.querySelectorAll('[data-offline-disabled]')) {
@@ -83,7 +88,7 @@ export default function OfflineReadGuard({ children }: { children: ReactNode }) 
             <AlertDescription className="text-sm">
               {savedAt ? `Offline — showing data saved at ${savedAt}.` : 'Offline — showing data saved on this PC.'}
               {pathname === '/customers' && savedAt ? ` Balances as of ${savedAt}.` : ''}
-              {' '}Changes need internet.
+              {' '}{['/customers', '/suppliers', '/medicine-codes'].includes(pathname) ? 'Record changes are saved on this PC until synced.' : 'Changes need internet.'}
             </AlertDescription>
           </Alert>
           {!!page?.misses && <Alert variant="destructive"><AlertDescription className="text-sm">{NOT_CACHED}</AlertDescription></Alert>}

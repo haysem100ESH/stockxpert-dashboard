@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { liveQuery } from 'dexie';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from './useAuth';
@@ -15,15 +15,21 @@ export function useOfflineRecordForm(entity: EntityType) {
   const page = entity === 'medicine_code' ? 'inventory' : entity === 'customer' ? 'customers' : 'suppliers';
   const canEdit = profile?.role === 'owner' || (profile?.role === 'staff' && !loading && !uncachedOffline && getPermission(page) === 'edit');
   const offlineAllowed = !reachable && canEdit;
+  const identity = useRef<{ userId: string; opId: string; entityId: string }>();
   const save = async (values: Record<string, unknown>, previous?: { id: string } & Record<string, unknown>) => {
     const branchId = typeof previous?.branch_id === 'string' ? previous.branch_id : selectedBranch || profile?.branch_id;
     if (!user || !branchId) throw new Error('Select a specific branch before saving offline.');
     const warning = await duplicateWarning(user.id, entity, values, previous?.id);
-    await enqueueOp({ userId: user.id, branchId, opType: `${entity}.${previous ? 'update' : 'create'}`, entityId: previous?.id, values, previous });
+    if (!identity.current || identity.current.userId !== user.id || (previous && identity.current.entityId !== previous.id)) {
+      identity.current = { userId: user.id, opId: crypto.randomUUID(), entityId: previous?.id ?? crypto.randomUUID() };
+    }
+    const op = await enqueueOp({ userId: user.id, branchId, opType: `${entity}.${previous ? 'update' : 'create'}`,
+      opId: identity.current.opId, entityId: identity.current.entityId, values, previous });
+    identity.current = undefined;
     signalBackupNow(); signalSync(); void qc.invalidateQueries(); window.dispatchEvent(new Event('app:refresh'));
-    return warning;
+    return { op, warning };
   };
-  const shouldSaveOffline = async () => !await checkReachability();
+  const shouldSaveOffline = async () => !reachable || !await checkReachability();
   return { reachable, canEdit, offlineAllowed, save, shouldSaveOffline };
 }
 export function useRecordOverlay<T extends { id: string }>(rows: T[], entity: EntityType): T[] {

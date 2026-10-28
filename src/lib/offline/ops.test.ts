@@ -33,7 +33,7 @@ test('enqueue commits atomically, accepts only allowed fields and preserves orig
 });
 test('failed transaction has no partial operation', async () => {
   const original = offlineDb.ops.add.bind(offlineDb.ops);
-  offlineDb.ops.add = async (...args) => { await original(...args); throw new Error('disk failure'); };
+  offlineDb.ops.add = (...args) => original(...args).then(() => { throw new Error('disk failure'); });
   try { await expect(create()).rejects.toThrow('disk failure'); } finally { offlineDb.ops.add = original; }
   expect(await offlineDb.ops.count()).toBe(0);
 });

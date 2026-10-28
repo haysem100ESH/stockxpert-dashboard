@@ -2,7 +2,6 @@ import { offlineDb, readMeta } from './db';
 import { withPosLock } from './network';
 import { OP_FIELDS, opBadge, type EntityType, type LocalOp, type OpType } from './opTypes';
 import type { CachedProfile } from './types';
-import { stripSecrets } from './readCache';
 
 export const entityPath = (entity: EntityType) => `/rest/v1/${entity === 'medicine_code' ? 'medicine_codes' : `${entity}s`}`;
 export const entityForPath = (path: string): EntityType | undefined =>
@@ -69,7 +68,8 @@ export async function enqueueOp(input: { userId: string; branchId: string; opTyp
         .sort((a, b) => b.deviceCreatedAt.localeCompare(a.deviceCreatedAt));
       const baseUpdatedAt = typeof server?.updated_at === 'string' ? server.updated_at : prior[0]?.baseUpdatedAt;
       if (input.opType.endsWith('.update') && !baseUpdatedAt && !prior.some(o => o.opType.endsWith('.create'))) throw new Error('Open this record online once before editing it offline.');
-      const now = new Date().toISOString();
+      // Millisecond ties must not let a third edit chain to the first edit.
+      const now = new Date(Math.max(Date.now(), prior[0] ? Date.parse(prior[0].deviceCreatedAt) + 1 : 0)).toISOString();
       const op: LocalOp = { opId, userId: input.userId, branchId: input.branchId, opType: input.opType, entityType, entityId,
         payload, baseUpdatedAt, prevOpId: prior[0]?.opId, deviceCreatedAt: now, updatedAt: now, status: 'pending', attempts: 0 };
       await offlineDb.ops.add(op); return op;
@@ -89,7 +89,7 @@ export function overlayRecords<T extends { id: string }>(rows: T[], ops: LocalOp
     if (!existing && op.opType.endsWith('.update')) continue;
     map.set(op.entityId, { ...(existing ?? { id: op.entityId, branch_id: op.branchId, created_at: op.deviceCreatedAt,
       totalPurchases: 0, totalPaid: 0, totalDebt: 0, credit_score: 50, max_credit_limit: 0, max_credit_limit_raw: null }),
-      ...op.payload, offlineBadge: opBadge(op) } as T);
+      ...op.payload, computed_debt: (existing as Record<string, unknown> | undefined)?.computed_debt ?? 0, offlineBadge: opBadge(op) } as T);
   }
   return [...map.values()];
 }
@@ -118,4 +118,3 @@ export async function duplicateWarning(userId: string, entity: EntityType, value
   return fields.some(field => values[field] && local.some(r => r.id !== entityId && String(r[field] ?? '').trim().toLowerCase() === String(values[field]).trim().toLowerCase()))
     ? 'A matching record is saved on this PC. Saved anyway — the server will check for duplicates.' : undefined;
 }
-export function safeExportOp(op: LocalOp) { return stripSecrets(op); }
