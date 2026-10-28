@@ -59,7 +59,7 @@ export default function EditSupplierDialog({
     if (await offlineForm.shouldSaveOffline()) {
       setLoading(true);
       try {
-        const warning = await offlineForm.save(formData, supplier as unknown as { id: string } & Record<string, unknown>);
+        const { warning } = await offlineForm.save(formData, supplier as unknown as { id: string } & Record<string, unknown>);
         toast({ title: 'Saved on this PC', description: warning });
          onOpenChange(false); onSupplierUpdated();
       } catch (error) { toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Please try again.', variant: 'destructive' }); }

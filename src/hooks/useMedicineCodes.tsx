@@ -78,7 +78,9 @@ export function useMedicineCodes() {
 
   const create = async (input: { code: string; label: string; notes?: string }) => {
     if (await offlineForm.shouldSaveOffline()) {
-      await offlineForm.save(input); return { ...input, id: '', owner_id: ownerId ?? '', created_at: new Date().toISOString(), notes: input.notes ?? null } as MedicineCode;
+      const { op, warning } = await offlineForm.save(input);
+      if (warning) { const { toast } = await import('@/hooks/use-toast'); toast({ title: 'Saved on this PC', description: warning }); }
+      return { ...input, id: op.entityId, owner_id: ownerId ?? '', created_at: op.deviceCreatedAt, notes: input.notes ?? null } as MedicineCode;
     }
     if (!ownerId) throw new Error('Owner not resolved');
     const { data, error } = await (supabase as any)
@@ -101,7 +103,9 @@ export function useMedicineCodes() {
     const prev = codes.find((c) => c.id === id);
     if (await offlineForm.shouldSaveOffline()) {
       if (!prev) throw new Error('Open this record before editing offline.');
-      await offlineForm.save(patch, prev as unknown as { id: string } & Record<string, unknown>); return;
+      const { warning } = await offlineForm.save(patch, prev as unknown as { id: string } & Record<string, unknown>);
+      if (warning) { const { toast } = await import('@/hooks/use-toast'); toast({ title: 'Saved on this PC', description: warning }); }
+      return;
     }
     const nextPatch = {
       ...(patch.code !== undefined ? { code: patch.code.trim() } : {}),

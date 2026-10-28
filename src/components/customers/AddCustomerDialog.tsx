@@ -37,7 +37,7 @@ export default function AddCustomerDialog({ open, onOpenChange, onCustomerAdded 
     if (await offlineForm.shouldSaveOffline()) {
       setLoading(true);
       try {
-        const warning = await offlineForm.save({ name, phone, notes });
+        const { warning } = await offlineForm.save({ name, phone, notes });
         toast({ title: 'Saved on this PC', description: warning });
         setName(''); setPhone(''); setNotes(''); onOpenChange(false); onCustomerAdded();
       } catch (error) { toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Please try again.', variant: 'destructive' }); }

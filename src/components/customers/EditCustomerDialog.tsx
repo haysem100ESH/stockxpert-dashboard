@@ -71,7 +71,7 @@ export default function EditCustomerDialog({ open, onOpenChange, customer, onCus
     if (await offlineForm.shouldSaveOffline()) {
       setLoading(true);
       try {
-        const warning = await offlineForm.save({ name, phone, notes }, customer as unknown as { id: string } & Record<string, unknown>);
+        const { warning } = await offlineForm.save({ name, phone, notes }, customer as unknown as { id: string } & Record<string, unknown>);
         toast({ title: 'Saved on this PC', description: warning });
          onOpenChange(false); onCustomerUpdated();
       } catch (error) { toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Please try again.', variant: 'destructive' }); }

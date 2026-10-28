@@ -47,7 +47,7 @@ export default function AddSupplierDialog({
     if (await offlineForm.shouldSaveOffline()) {
       setLoading(true);
       try {
-        const warning = await offlineForm.save(formData);
+        const { warning } = await offlineForm.save(formData);
         toast({ title: 'Saved on this PC', description: warning });
         resetForm(); onOpenChange(false); onSupplierAdded();
       } catch (error) { toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Please try again.', variant: 'destructive' }); }
