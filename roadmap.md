@@ -39,3 +39,11 @@
 - [ ] Real authenticated server checkout and reconnect sync — blocked by unavailable original-app test session
 - [ ] Published offline app-shell verification — requires publishing; development intentionally does not register a worker
 - [x] Storage protection, automatic backup folder, restore from backup (frontend only)
+
+## Offline read Phase 1
+- [x] Shared read cache (Dexie v3 readCache), secrets stripped, size/LRU/30-day limits
+- [x] Offline gates fail closed; owner branch selector limited to cached branches
+- [x] In-scope pages read-only offline with banners; other routes show Needs internet
+- [x] Inventory offline reservations + Addis expiry; Overview unconfirmed sales notice
+- [x] Tests (164 pass) and production build
+- [ ] Real device offline verification — not performed
