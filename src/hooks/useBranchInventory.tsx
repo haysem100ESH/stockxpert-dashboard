@@ -13,7 +13,12 @@
  * Cache key: ['branch-inventory', { ownerId, selectedBranch, staffBranchId }]
  * Stale time: 60s.
  */
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { liveQuery } from 'dexie';
+import { useOfflineStatus } from '@/lib/offline/store';
+import { branchReservations } from '@/lib/offline/queue';
+import { applyReservations } from '@/lib/offline/rules';
+import type { LocalSale } from '@/lib/offline/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/db';
 import { useAuth } from './useAuth';
@@ -229,15 +234,26 @@ export function useBranchInventory() {
     placeholderData: (prev) => prev,
   });
 
+  // Offline: subtract unsynced sales of every cashier on this PC (shared Sales reservation rule).
+  const { reachable } = useOfflineStatus();
+  const [reservations, setReservations] = useState<LocalSale[]>([]);
+  const reservationScope = branchIds.join(',');
+  useEffect(() => {
+    if (reachable || !branchIds.length) { setReservations([]); return; }
+    const sub = liveQuery(() => branchReservations(branchIds)).subscribe({ next: setReservations, error: () => setReservations([]) });
+    return () => sub.unsubscribe();
+  }, [reachable, reservationScope]);
+
   const items = useMemo(() => {
-    const base = query.data ?? [];
+    const raw = query.data ?? [];
+    const base = !reachable && reservations.length ? applyReservations(raw as Array<EnrichedBranchItem & { quantity: number }>, reservations) : raw;
     const ingMap = ingredientsQuery.data;
     if (!ingMap) return base;
     return base.map((it) => ({
       ...it,
       active_ingredients: ingMap[(it as any).medicine_id] || [],
     }));
-  }, [query.data, ingredientsQuery.data]);
+  }, [query.data, ingredientsQuery.data, reachable, reservations]);
 
   useEffect(() => {
     const handler = () => queryClient.refetchQueries({ queryKey: ['branch-inventory'] });
