@@ -16,7 +16,14 @@ mock.module('@/hooks/useAuth', () => ({ useAuth: () => ({ user, profile: { id: '
 mock.module('@/hooks/useBranchContext', () => ({ useBranchContext: () => ({ selectedBranch: 'branch' }) }));
 mock.module('@/hooks/useStaffPermissions', () => ({ useStaffPermissions: () => ({ getPermission: () => edit ? 'edit' : 'read', loading: false, uncachedOffline: false }) }));
 mock.module('@/hooks/use-toast', () => ({ useToast: () => ({ toast: (value: unknown) => notifications.push(value) }), toast: () => {} }));
-mock.module('@/lib/db', () => ({ supabase: { from: () => { backendWrites++; throw new Error('Offline forms must not write to server'); } } }));
+mock.module('@/lib/db', () => ({ supabase: { from: (table: string) => {
+  const query: Record<string, unknown> = {};
+  for (const method of ['select', 'eq', 'in', 'order']) query[method] = () => query;
+  query.single = async () => ({ data: table === 'pharmacy_branches' ? { pharmacy_owner_id: 'owner' } : null, error: null });
+  query.then = (resolve: (value: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(resolve);
+  for (const method of ['insert', 'update', 'delete']) query[method] = () => { backendWrites++; throw new Error('Offline forms must not write to server'); };
+  return query;
+} } }));
 mock.module('@/integrations/supabase/client', () => ({ supabase: {} }));
 mock.module('@/hooks/useBranchInventory', () => ({ useBranchInventory: () => ({ items: [] }) }));
 mock.module('@/hooks/useMedicineCodeAnalytics', () => ({ useMedicineCodeBatches: () => ({ batchesByMedicine: new Map(), globalAlertDays: 30 }), classifyExpiry: () => 'normal' }));

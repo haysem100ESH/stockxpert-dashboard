@@ -52,9 +52,8 @@ export async function restoreBackup(doc: BackupDocument, userId: string): Promis
     }
     for (const op of doc.ops ?? []) {
       if (!validOpRecord(op, userId)) { result.invalid++; continue; }
-      if (op.status === 'synced') { result.skippedSynced++; continue; }
       if (await offlineDb.ops.get(op.opId)) { result.present++; continue; }
-      await offlineDb.ops.add({ ...exportOp(op), status: op.status === 'discarded' ? 'discarded' : op.serverIssue ? 'needs_attention' : 'pending',
+      await offlineDb.ops.add({ ...exportOp(op), status: op.status === 'synced' || op.status === 'discarded' ? op.status : op.serverIssue ? 'needs_attention' : 'pending',
         attempts: 0, nextAttemptAt: Date.now(), updatedAt: now });
       result.restored++;
     }

@@ -35,7 +35,8 @@ export function buildBackupDocument(records: LocalSale[], userId: string, device
   const cutoff = new Date(now.getTime() - SYNCED_RETENTION_MS).toISOString();
   const sales = records.filter(r => r.userId === userId && (isUnresolved(r) || (r.status === 'synced' && !!r.syncedAt && r.syncedAt >= cutoff)))
     .map(exportRecord);
-  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, userId, deviceId, generatedAt: now.toISOString(), sales, ops: ops.filter(o => o.userId === userId && (unresolvedOp(o) || o.updatedAt >= cutoff)).map(exportOp) };
+  // Keep confirmed ancestors as well: restored dependents must find their chain.
+  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, userId, deviceId, generatedAt: now.toISOString(), sales, ops: ops.filter(o => o.userId === userId).map(exportOp) };
 }
 export const backupPrefix = (userId: string, deviceId: string) => `pharmaxpert-backup-${userId.slice(0, 8)}-${deviceId}-`;
 export const latestName = (userId: string, deviceId: string) => `${backupPrefix(userId, deviceId)}latest.json`;
