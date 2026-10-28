@@ -1,5 +1,11 @@
 # Offline POS — part 1
 
+## Offline stock Phase 3
+- [ ] Extend existing operations, dependencies and shared stock overlay
+- [ ] Offline receive/adjust controls, cached permission and suppliers
+- [ ] Stock resolution, activity, backup/export coverage
+- [ ] Full Bun suite and automatic build; document report and verification limitations
+
 ## Offline records Phase 2
 - [x] Durable ops, shared ordered sync, chaining and overlay
 - [x] Limited offline forms with cached edit permission
