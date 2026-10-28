@@ -20,6 +20,7 @@ import { liveQuery } from 'dexie';
 import { offlineDb, readMeta } from '@/lib/offline/db';
 import { fetchCatalog, replaceCatalog } from '@/lib/offline/catalog';
 import { availableStock } from '@/lib/offline/rules';
+import { branchReservations } from '@/lib/offline/queue';
 import { checkReachability, withPosLock } from '@/lib/offline/network';
 import { useOfflineStatus } from '@/lib/offline/store';
 import type { CatalogItem } from '@/lib/offline/types';
@@ -163,7 +164,7 @@ export function useSalesInventory() {
     if (!profile || !branchIds.length) { setLocalLoading(false); return; }
     const sub = liveQuery(async () => ({
       rows: await offlineDb.catalog.where('ownerKey').equals(profile.id).and(row => branchIds.includes(row.branchId)).toArray(),
-      sales: await offlineDb.sales.where('branchId').anyOf(branchIds).toArray(),
+      sales: await branchReservations(branchIds),
       times: await Promise.all(branchIds.map(id => readMeta<string>(`catalogSync:${profile.id}:${id}`))),
     })).subscribe({ next: ({ rows, sales, times }) => {
       setLocalRows(rows); setReservations(sales); setLocalLoading(false);
