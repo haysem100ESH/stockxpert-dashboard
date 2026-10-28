@@ -83,6 +83,18 @@ export async function stockContext(userId: string, itemId: string, branchId: str
   const sales = await offlineDb.sales.where('branchId').equals(branchId).toArray();
   // Missing batch snapshots must not be mistaken for a verified unbatched item.
   const batchKnown = catalog?.batches !== undefined || (await offlineDb.readCache.where('[userId+path]').equals([userId, '/rest/v1/inventory_batches']).toArray())
-    .some(e => { const p = new URLSearchParams(e.queryKey); return p.get('select') === '*' && p.get('branch_item_id') === `eq.${itemId}`; });
+    .some(e => e.select === '*' && e.filters.includes(`branch_item_id=eq.${itemId}`));
   return { item, batches: overlayBatches(cachedBatches, ops, itemId, branchId), ops, sales, batchKnown };
+}
+/** Allocate local sale reservations in FEFO order before validating a batch decrease. */
+export function batchAvailableOnDevice(batchId: string, batches: InventoryBatch[], sales: LocalSale[], itemId: string, branchId: string) {
+  let reserved = sales.filter(s => s.branchId === branchId && RESERVING_STATUSES.some(t => t === s.status))
+    .reduce((sum, s) => sum + s.payload.items.filter(i => i.branch_item_id === itemId).reduce((n, i) => n + i.base_quantity, 0), 0);
+  const today = addisDayString();
+  for (const batch of [...batches].sort((a, b) => (a.expiry_date ?? '9999').localeCompare(b.expiry_date ?? '9999') || a.created_at.localeCompare(b.created_at))) {
+    const deduction = !batch.expiry_date || batch.expiry_date >= today ? Math.min(Math.max(0, batch.remaining_quantity), reserved) : 0;
+    reserved -= deduction;
+    if (batch.id === batchId) return Math.max(0, batch.remaining_quantity - deduction);
+  }
+  return 0;
 }

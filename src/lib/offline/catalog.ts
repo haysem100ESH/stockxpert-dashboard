@@ -23,7 +23,7 @@ export async function fetchCatalog(branchIds: string[], userId: string): Promise
     chunkedIn<any>(medicineIds, ids => supabase.from('medicines').select('id, name, generic_name, category, item_type, unit_label, units_per_pack, medicine_group, strength, packaging_mode, main_unit_name, unit_price').in('id', ids), 20),
     // Include depleted rows too: zero live batches is not a legacy fallback.
     chunkedIn<any>(items.map(item => item.id), ids => supabase.from('inventory_batches')
-      .select('branch_item_id, remaining_quantity, expiry_date, selling_price, purchase_price, created_at').in('branch_item_id', ids), 20),
+      .select('*').in('branch_item_id', ids), 20),
     chunkedIn<any>(medicineIds, ids => supabase.from('medicine_packaging').select('*').in('medicine_id', ids), 20),
     chunkedIn<any>(branchIds, ids => supabase.from('pharmacy_branches').select('id, name').in('id', ids)),
   ]);
@@ -47,7 +47,7 @@ export async function fetchCatalog(branchIds: string[], userId: string): Promise
       purchase_price: Number(front?.purchase_price ?? item.purchase_price),
       expiry_date: front ? front.expiry_date : item.expiry_date,
       stock_quantity: serverAvailable, serverAvailable, open_pack_units: 0,
-      packaging: pkgMap.get(item.medicine_id) ?? null, cachedAt,
+      packaging: pkgMap.get(item.medicine_id) ?? null, cachedAt, batches: itemBatches,
     } satisfies SalesMedicine & CatalogItem;
   });
 }

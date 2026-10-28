@@ -21,6 +21,8 @@ import { liveQuery } from 'dexie';
 import { offlineDb, readMeta } from '@/lib/offline/db';
 import { fetchCatalog, replaceCatalog } from '@/lib/offline/catalog';
 import { availableStock } from '@/lib/offline/rules';
+import { stockOnDevice } from '@/lib/offline/stock';
+import type { LocalOp } from '@/lib/offline/opTypes';
 import { branchReservations } from '@/lib/offline/queue';
 import { checkReachability, withPosLock } from '@/lib/offline/network';
 import { useOfflineStatus } from '@/lib/offline/store';
@@ -123,6 +125,7 @@ export function useSalesInventory() {
   const queryClient = useQueryClient();
   const { reachable } = useOfflineStatus();
   const [localRows, setLocalRows] = useState<CatalogItem[]>([]);
+  const [stockOps, setStockOps] = useState<LocalOp[]>([]);
   const [reservations, setReservations] = useState<import('@/lib/offline/types').LocalSale[]>([]);
   const [localLoading, setLocalLoading] = useState(true);
   const [catalogError, setCatalogError] = useState('');
@@ -166,8 +169,10 @@ export function useSalesInventory() {
     const sub = liveQuery(async () => ({
       rows: await offlineDb.catalog.where('ownerKey').equals(profile.id).and(row => branchIds.includes(row.branchId)).toArray(),
       sales: await branchReservations(branchIds),
+      ops: await offlineDb.ops.where('branchId').anyOf(branchIds).toArray(),
       times: await Promise.all(branchIds.map(id => readMeta<string>(`catalogSync:${profile.id}:${id}`))),
-    })).subscribe({ next: ({ rows, sales, times }) => {
+    })).subscribe({ next: ({ rows, sales, times, ops }) => {
+      setStockOps(ops);
       setLocalRows(rows); setReservations(sales); setLocalLoading(false);
       setCachedAt(times.filter((time): time is string => !!time).sort()[0]);
     }, error: () => { setLocalLoading(false); setCatalogError('Local storage is unavailable. Offline Sales cannot open on this device.'); } });
@@ -191,8 +196,8 @@ export function useSalesInventory() {
     return () => { clearInterval(interval); };
   }, [enabled, reachable, refresh]);
   const medicines = useMemo(() => localRows.map(row => ({ ...row,
-    stock_quantity: availableStock(row.serverAvailable, row.id, reservations),
-  })).filter(row => row.stock_quantity > 0), [localRows, reservations]);
+    stock_quantity: stockOnDevice(row.serverAvailable, row.id, row.branchId, stockOps, reservations, true),
+  })).filter(row => row.stock_quantity > 0), [localRows, reservations, stockOps]);
   const packagingMap = useMemo(() => Object.fromEntries(localRows.filter(row => row.packaging)
     .map(row => [row.medicine_id, row.packaging])) as Record<string, import('@/lib/packaging').Packaging>, [localRows]);
 

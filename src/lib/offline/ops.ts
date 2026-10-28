@@ -2,11 +2,13 @@ import { offlineDb, readMeta } from './db';
 import { withPosLock } from './network';
 import { OP_FIELDS, opBadge, type EntityType, type LocalOp, type OpType } from './opTypes';
 import type { CachedProfile } from './types';
+import { stockPayload, stockContext, stockOnDevice, batchAvailableOnDevice } from './stock';
 
 export const entityPath = (entity: EntityType) => `/rest/v1/${entity === 'medicine_code' ? 'medicine_codes' : `${entity}s`}`;
 export const entityForPath = (path: string): EntityType | undefined =>
   (['customer', 'supplier', 'medicine_code'] as EntityType[]).find(e => entityPath(e) === path);
 export function allowedOpPayload(type: OpType, values: Record<string, unknown>, previous?: Record<string, unknown>) {
+  if (type.startsWith('stock.')) return stockPayload(type, values);
   const [entity, action] = type.split('.') as [EntityType, string];
   const fields = OP_FIELDS[entity];
   if (!fields || !['create', 'update'].includes(action)) throw new Error('Unsupported operation.');
@@ -37,7 +39,7 @@ export async function canEnqueueOp(userId: string, entity: EntityType, branchId:
   ]);
   if (!profile || profile.id !== userId || profile.active === false || profile.manually_deactivated || !branches?.includes(branchId)
     || !subscription || !['active', 'expiring_soon'].includes(subscription.status)) return false;
-  return profile.role === 'owner' || (profile.role === 'staff' && permissions?.[entity === 'medicine_code' ? 'inventory' : `${entity}s`] === 'edit');
+  return profile.role === 'owner' || (profile.role === 'staff' && permissions?.[entity === 'medicine_code' || entity === 'stock' ? 'inventory' : `${entity}s`] === 'edit');
 }
 export async function cachedEntity(userId: string, entity: EntityType, entityId: string, branchId: string) {
   const entries = await offlineDb.readCache.where('[userId+path]').equals([userId, entityPath(entity)]).toArray();
@@ -55,9 +57,10 @@ export async function enqueueOp(input: { userId: string; branchId: string; opTyp
   const entityId = input.entityId ?? crypto.randomUUID(); const opId = input.opId ?? crypto.randomUUID();
   return withPosLock(async () => {
     if (checkPermission && !await canEnqueueOp(input.userId, entityType, input.branchId)) throw new Error('Open this page online with edit permission before saving offline.');
-    const server = await cachedEntity(input.userId, entityType, entityId, input.branchId);
+    const context = entityType === 'stock' ? await stockContext(input.userId, String(input.values.branch_item_id ?? input.previous?.branch_item_id ?? ''), input.branchId) : undefined;
+    const server = entityType === 'stock' ? undefined : await cachedEntity(input.userId, entityType, entityId, input.branchId);
     const payload = allowedOpPayload(input.opType, input.values, input.previous);
-    return offlineDb.transaction('rw', offlineDb.ops, async () => {
+    return offlineDb.transaction('rw', offlineDb.ops, offlineDb.sales, offlineDb.catalog, offlineDb.readCache, async () => {
       const existing = await offlineDb.ops.get(opId);
       if (existing) {
         if (existing.userId !== input.userId || existing.entityId !== entityId || JSON.stringify(existing.payload) !== JSON.stringify(payload)) throw new Error('Operation ID already in use.');
@@ -66,12 +69,38 @@ export async function enqueueOp(input: { userId: string; branchId: string; opTyp
       const prior = (await offlineDb.ops.where('entityId').equals(entityId).toArray())
         .filter(o => o.userId === input.userId && o.entityType === entityType && o.branchId === input.branchId && ['pending', 'syncing', 'needs_attention'].includes(o.status))
         .sort((a, b) => b.deviceCreatedAt.localeCompare(a.deviceCreatedAt));
+      const dependsOn: string[] = [];
+      let itemId: string | undefined;
+      if (entityType === 'stock') {
+        if (!context?.item) throw new Error('Open this item online once before changing stock offline.');
+        itemId = String(context.item.id);
+        if (input.opType === 'stock.receive') {
+          if (context.ops.some(o => o.entityId === entityId && o.opType === 'stock.receive')) throw new Error('This batch ID is already in use.');
+          if (payload.supplier_id) {
+            const supplier = (await offlineDb.ops.where('entityId').equals(String(payload.supplier_id)).toArray())
+              .filter(o => o.userId === input.userId && o.branchId === input.branchId && o.opType === 'supplier.create' && o.status !== 'synced');
+            dependsOn.push(...supplier.map(o => o.opId));
+          }
+        } else {
+          if (!context.batchKnown) throw new Error('Open the batches online once before adjusting stock offline.');
+          if (payload.branch_item_id && context.batches.length) throw new Error('This item has batches. Choose a batch.');
+          const batch = payload.batch_id ? context.batches.find(b => b.id === payload.batch_id) : undefined;
+          if (payload.batch_id && !batch) throw new Error('Open this batch online once before adjusting it offline.');
+          if (entityId !== (payload.batch_id ?? payload.branch_item_id)) throw new Error('Stock adjustment target does not match its ID.');
+          const available = batch ? batchAvailableOnDevice(batch.id, context.batches, context.sales, itemId, input.branchId) :
+            stockOnDevice(Number(context.item.quantity), itemId, input.branchId, context.ops, context.sales);
+          if (available + Number(payload.delta) < -0.00001) throw new Error(`Not enough stock on this PC: ${available} available.`);
+          const receive = context.ops.find(o => o.entityId === entityId && o.opType === 'stock.receive' && o.status !== 'synced');
+          if (receive) dependsOn.push(receive.opId);
+        }
+      }
       const baseUpdatedAt = typeof server?.updated_at === 'string' ? server.updated_at : prior[0]?.baseUpdatedAt;
       if (input.opType.endsWith('.update') && !baseUpdatedAt && !prior.some(o => o.opType.endsWith('.create'))) throw new Error('Open this record online once before editing it offline.');
       // Millisecond ties must not let a third edit chain to the first edit.
       const now = new Date(Math.max(Date.now(), prior[0] ? Date.parse(prior[0].deviceCreatedAt) + 1 : 0)).toISOString();
       const op: LocalOp = { opId, userId: input.userId, branchId: input.branchId, opType: input.opType, entityType, entityId,
-        payload, baseUpdatedAt, prevOpId: prior[0]?.opId, deviceCreatedAt: now, updatedAt: now, status: 'pending', attempts: 0 };
+        payload, baseUpdatedAt, prevOpId: prior[0]?.opId, ...(entityType === 'stock' ? { stockItemId: itemId } : {}),
+        dependsOn: [...new Set([...dependsOn, ...(prior[0] ? [prior[0].opId] : [])])], deviceCreatedAt: now, updatedAt: now, status: 'pending', attempts: 0 };
       await offlineDb.ops.add(op); return op;
     });
   });

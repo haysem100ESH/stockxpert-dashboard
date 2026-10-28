@@ -1,6 +1,7 @@
 import { offlineDb } from './db';
 import { availableStock, hasCredit, reasonMessage } from './rules';
 import type { LocalSale, RpcResult } from './types';
+import { stockOnDevice } from './stock';
 
 /** Caller holds the POS lock; resume only the signing-in cashier's interrupted work. */
 export async function recoverUserQueue(userId: string) {
@@ -14,7 +15,7 @@ export function branchReservations(branchIds: string[]) {
 }
 
 export async function enqueueSale(record: LocalSale, validateStock: boolean) {
-  await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, async () => {
+  await offlineDb.transaction('rw', offlineDb.sales, offlineDb.catalog, offlineDb.meta, offlineDb.ops, async () => {
     const existing = await offlineDb.sales.get(record.clientTxnId);
     if (existing) return;
     if (validateStock) {
@@ -22,6 +23,7 @@ export async function enqueueSale(record: LocalSale, validateStock: boolean) {
       const allowed = (await offlineDb.meta.get(`branches:${record.userId}`))?.value as string[] | undefined;
       if (!allowed?.includes(record.branchId)) throw new Error(reasonMessage('BRANCH_NOT_AUTHORIZED'));
       const reservations = await branchReservations([record.branchId]);
+      const stockOps = await offlineDb.ops.where('branchId').equals(record.branchId).toArray();
       const requested = new Map<string, number>();
       for (const item of record.payload.items) {
         if (!Number.isFinite(item.base_quantity) || item.base_quantity <= 0) throw new Error(reasonMessage('INVALID_QUANTITY'));
@@ -30,7 +32,8 @@ export async function enqueueSale(record: LocalSale, validateStock: boolean) {
       for (const [id, quantity] of requested) {
         const item = await offlineDb.catalog.get(id);
         if (!item || item.ownerKey !== record.userId || item.branchId !== record.branchId) throw new Error(reasonMessage('ITEM_NOT_IN_BRANCH'));
-        if (quantity > availableStock(item.serverAvailable, id, reservations) + 0.00001) throw new Error(reasonMessage('INSUFFICIENT_STOCK', { item: item.name, available: availableStock(item.serverAvailable, id, reservations) }));
+        const available = stockOnDevice(item.serverAvailable, id, record.branchId, stockOps, reservations, true);
+        if (quantity > available + 0.00001) throw new Error(reasonMessage('INSUFFICIENT_STOCK', { item: item.name, available }));
       }
     }
     await offlineDb.sales.add(record);
