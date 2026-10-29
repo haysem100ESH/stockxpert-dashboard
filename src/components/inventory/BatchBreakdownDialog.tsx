@@ -43,7 +43,8 @@ export default function BatchBreakdownDialog({ open, onOpenChange, branchItemId,
 
   // Pending receives/adjustments from every cashier on this PC appear with badges; synced ops are excluded.
   const branchId = serverBatches[0]?.branch_id ?? selectedBranch ?? profile?.branch_id ?? '';
-  const batches = branchItemId && branchId ? overlayBatches(serverBatches, ops, branchItemId, branchId) : serverBatches;
+  const batches: Array<InventoryBatch & { offlineBadge?: string; pendingDelta?: number }> =
+    branchItemId && branchId ? overlayBatches(serverBatches, ops, branchItemId, branchId) : serverBatches;
 
   const isExpired = (date: string | null) => {
     if (!date) return false;
@@ -118,7 +119,7 @@ export default function BatchBreakdownDialog({ open, onOpenChange, branchItemId,
                       <TableCell className="text-right">{original}</TableCell>
                       <TableCell className="text-right font-medium">
                         {remaining}
-                        {batch.pendingDelta !== 0 && !batch.offlineBadge && (
+                        {(batch.pendingDelta ?? 0) !== 0 && !batch.offlineBadge && (
                           <span className="block text-xs text-muted-foreground">({Number(batch.pendingDelta) > 0 ? '+' : ''}{batch.pendingDelta} pending)</span>
                         )}
                       </TableCell>
