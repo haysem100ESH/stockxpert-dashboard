@@ -18,6 +18,8 @@ export interface ReadCacheEntry {
   path: string; select: string; filters: string[]; paged: boolean; accept: string;
   status: number; contentRange: string | null; data: string;
   savedAt: string; lastUsedAt: number; size: number; dated: boolean; schemaVersion: number;
+  /** Set when a stock op was applied after this snapshot; kept serving until an online read refreshes it. */
+  stale?: boolean;
 }
 
 let readUser: string | null = null;

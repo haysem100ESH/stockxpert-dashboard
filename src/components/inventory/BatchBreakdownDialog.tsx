@@ -1,9 +1,15 @@
 import { useState, useEffect } from 'react';
+import { liveQuery } from 'dexie';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Package } from 'lucide-react';
 import { getBatchesForItem, type InventoryBatch } from '@/lib/batchInventory';
+import { useAuth } from '@/hooks/useAuth';
+import { useBranchContext } from '@/hooks/useBranchContext';
+import { userOps } from '@/lib/offline/ops';
+import { overlayBatches } from '@/lib/offline/stock';
+import type { LocalOp } from '@/lib/offline/opTypes';
 
 interface BatchBreakdownDialogProps {
   open: boolean;
@@ -13,18 +19,32 @@ interface BatchBreakdownDialogProps {
 }
 
 export default function BatchBreakdownDialog({ open, onOpenChange, branchItemId, itemName }: BatchBreakdownDialogProps) {
-  const [batches, setBatches] = useState<InventoryBatch[]>([]);
+  const { user, profile } = useAuth();
+  const { selectedBranch } = useBranchContext();
+  const [serverBatches, setServerBatches] = useState<InventoryBatch[]>([]);
+  const [ops, setOps] = useState<LocalOp[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (open && branchItemId) {
       setLoading(true);
       getBatchesForItem(branchItemId).then(data => {
-        setBatches(data);
+        setServerBatches(data);
         setLoading(false);
       });
     }
   }, [open, branchItemId]);
+
+  useEffect(() => {
+    if (!user || !open) return;
+    const sub = liveQuery(() => userOps(user.id)).subscribe({ next: setOps, error: () => setOps([]) });
+    return () => sub.unsubscribe();
+  }, [user?.id, open]);
+
+  // Pending receives/adjustments from every cashier on this PC appear with badges; synced ops are excluded.
+  const branchId = serverBatches[0]?.branch_id ?? selectedBranch ?? profile?.branch_id ?? '';
+  const batches: Array<InventoryBatch & { offlineBadge?: string; pendingDelta?: number }> =
+    branchItemId && branchId ? overlayBatches(serverBatches, ops, branchItemId, branchId) : serverBatches;
 
   const isExpired = (date: string | null) => {
     if (!date) return false;
@@ -99,6 +119,9 @@ export default function BatchBreakdownDialog({ open, onOpenChange, branchItemId,
                       <TableCell className="text-right">{original}</TableCell>
                       <TableCell className="text-right font-medium">
                         {remaining}
+                        {(batch.pendingDelta ?? 0) !== 0 && !batch.offlineBadge && (
+                          <span className="block text-xs text-muted-foreground">({Number(batch.pendingDelta) > 0 ? '+' : ''}{batch.pendingDelta} pending)</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right text-muted-foreground">
                         ETB {Number(batch.purchase_price).toFixed(2)}
@@ -120,7 +143,9 @@ export default function BatchBreakdownDialog({ open, onOpenChange, branchItemId,
                         {new Date(batch.created_at).toLocaleDateString()}
                       </TableCell>
                       <TableCell>
-                        {depleted ? (
+                        {batch.offlineBadge ? (
+                          <Badge variant="outline" className="text-xs">{batch.offlineBadge}</Badge>
+                        ) : depleted ? (
                           <Badge variant="secondary" className="text-xs">Depleted</Badge>
                         ) : isExpired(batch.expiry_date) ? (
                           <Badge variant="destructive" className="text-xs">Expired</Badge>
