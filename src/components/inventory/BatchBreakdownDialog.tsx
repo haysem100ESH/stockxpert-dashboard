@@ -1,9 +1,15 @@
 import { useState, useEffect } from 'react';
+import { liveQuery } from 'dexie';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Package } from 'lucide-react';
 import { getBatchesForItem, type InventoryBatch } from '@/lib/batchInventory';
+import { useAuth } from '@/hooks/useAuth';
+import { useBranchContext } from '@/hooks/useBranchContext';
+import { userOps } from '@/lib/offline/ops';
+import { overlayBatches } from '@/lib/offline/stock';
+import type { LocalOp } from '@/lib/offline/opTypes';
 
 interface BatchBreakdownDialogProps {
   open: boolean;
