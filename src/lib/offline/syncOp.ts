@@ -27,10 +27,12 @@ export async function settleOp(op: LocalOp, result: OpResult) {
         else if (batches) { const batch = batches.find(b => b.id === op.entityId); if (batch) batch.remaining_quantity = Math.max(0, batch.remaining_quantity + delta); }
         await offlineDb.catalog.update(item.id, { serverAvailable: Math.max(0, item.serverAvailable + delta), batches });
       }
-      // Remove stale read snapshots rather than persisting provisional fields into the read cache.
-      // A subsequent visible online read must refresh before these pages can be served offline again.
+      // Mark affected read snapshots stale but keep serving them: a refetch is only guaranteed
+      // for currently visible queries, and deleting them could make Inventory unavailable offline.
+      // Synced ops are excluded from the overlay, so kept snapshots are never double counted;
+      // the next successful online read overwrites the entry and clears the flag.
       await offlineDb.readCache.filter(e => ['inventory_batches', 'branch_items'].some(t => e.path === `/rest/v1/${t}`)
-        && (e.scopeKey === op.branchId || e.scopeKey === 'owner-all' || e.scopeKey === 'global')).delete();
+        && (e.scopeKey === op.branchId || e.scopeKey === 'owner-all' || e.scopeKey === 'global')).modify({ stale: true });
     }
     await offlineDb.ops.update(op.opId, result.status === 'applied'
       ? { status: 'synced', serverUpdatedAt: result.updated_at, lastError: undefined, reasonCode: undefined, serverIssue: false, updatedAt: now }
