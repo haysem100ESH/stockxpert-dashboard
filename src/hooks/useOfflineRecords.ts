@@ -9,7 +9,7 @@ import { enqueueOp, duplicateWarning, overlayRecords, userOps } from '@/lib/offl
 import { type EntityType, type LocalOp } from '@/lib/offline/opTypes';
 import { checkReachability } from '@/lib/offline/network';
 
-export function useOfflineRecordForm(entity: EntityType) {
+export function useOfflineRecordForm(entity: Exclude<EntityType, 'stock'>) {
   const { user, profile } = useAuth(); const { selectedBranch } = useBranchContext(); const { reachable } = useOfflineStatus();
   const { getPermission, loading, uncachedOffline } = useStaffPermissions(); const qc = useQueryClient();
   const page = entity === 'medicine_code' ? 'inventory' : entity === 'customer' ? 'customers' : 'suppliers';
