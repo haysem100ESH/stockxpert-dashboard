@@ -40,6 +40,9 @@ const sale = (clientTxnId: string, userId: string, base: number, status: LocalSa
 });
 const receive = (opId: string, values: Record<string, unknown>, userId = 'user') =>
   enqueueOp({ userId, branchId: 'branch', opType: 'stock.receive', opId, entityId: `batch-${opId}`, values: { branch_item_id: 'item', ...values } });
+const otherOp = (opId: string, opType: 'stock.receive' | 'stock.adjust', entityId: string, payload: Record<string, string | number>) => ({
+  opId, userId: 'other', branchId: 'branch', opType, entityType: 'stock' as const, entityId, payload, stockItemId: 'item', dependsOn: [],
+  deviceCreatedAt: `${DEVICE_DAY}T09:00:00Z`, updatedAt: `${DEVICE_DAY}T09:00:00Z`, status: 'pending' as const, attempts: 0 });
 const applied = (opId: string): OpResult => ({ status: 'applied', updated_at: '2026-10-29T12:00:00Z', op_id: opId, branch_item_id: 'item' });
 
 test('receive keeps only allowed fields and requires quantity and selling price', async () => {
@@ -84,10 +87,10 @@ test('receive on an offline supplier depends on it and is blocked while the supp
 test('adjustment on an offline-received batch depends on the receipt and validates against device stock', async () => {
   const receipt = await receive('r6', { quantity: 5, selling_price: 12 });
   const adjust = await enqueueOp({ userId: 'user', branchId: 'branch', opType: 'stock.adjust', opId: 'a1', entityId: receipt.entityId,
-    values: { batch_id: receipt.entityId, branch_item_id: 'item', delta: -2, reason_type: 'damage' } });
+    values: { batch_id: receipt.entityId, delta: -2, reason_type: 'damage' }, previous: { branch_item_id: 'item' } });
   expect(adjust.dependsOn).toContain(receipt.opId);
   await expect(enqueueOp({ userId: 'user', branchId: 'branch', opType: 'stock.adjust', opId: 'a2', entityId: receipt.entityId,
-    values: { batch_id: receipt.entityId, branch_item_id: 'item', delta: -6, reason_type: 'damage' } })).rejects.toThrow('Not enough stock');
+    values: { batch_id: receipt.entityId, delta: -6, reason_type: 'damage' }, previous: { branch_item_id: 'item' } })).rejects.toThrow('Not enough stock');
   let sent = 0;
   const deps = { call: async () => { sent++; return { data: applied(adjust.opId), error: null }; }, sessionValid: async () => true };
   await offlineDb.ops.update(receipt.opId, { status: 'discarded' });
@@ -98,8 +101,7 @@ test('adjustment on an offline-received batch depends on the receipt and validat
 
 test('device stock is snapshot plus receipts and deltas minus sales of every cashier on this PC', async () => {
   await receive('r7', { quantity: 5, selling_price: 12 });
-  await enqueueOp({ userId: 'other', branchId: 'branch', opType: 'stock.adjust', opId: 'a3', entityId: 'item',
-    values: { branch_item_id: 'item', delta: -2, reason_type: 'damage' } }, false);
+  await offlineDb.ops.add(otherOp('a3', 'stock.adjust', 'item', { branch_item_id: 'item', delta: -2, reason_type: 'damage' }));
   await offlineDb.sales.bulkAdd([sale('s1', 'user', 3), sale('s2', 'other', 2), sale('s3', 'other', 4, 'discarded')]);
   const ops = await offlineDb.ops.where('branchId').equals('branch').toArray();
   const sales = await offlineDb.sales.where('branchId').equals('branch').toArray();
@@ -109,7 +111,7 @@ test('device stock is snapshot plus receipts and deltas minus sales of every cas
 
 test('received stock is sellable in the offline catalog, expired receipts are not', async () => {
   await receive('r8', { quantity: 5, selling_price: 12, expiry_date: '2027-01-01' });
-  await receive('r9', { quantity: 4, selling_price: 12, expiry_date: '2026-10-01' }, 'other');
+  await offlineDb.ops.add(otherOp('r9', 'stock.receive', 'batch-r9', { branch_item_id: 'item', quantity: 4, selling_price: 12, expiry_date: '2026-10-01' }));
   const ops = await offlineDb.ops.where('branchId').equals('branch').toArray();
   expect(stockDelta('item', 'branch', ops)).toBe(9);
   expect(stockDelta('item', 'branch', ops, true, DEVICE_DAY)).toBe(5);
@@ -164,9 +166,10 @@ test('read-only inventory permission disables offline stock controls', async () 
 });
 
 test('pending receive/adjust activities de-duplicate against server rows', async () => {
-  const receipt = await receive('r13', { quantity: 5, selling_price: 12 });
+  // Adjust the unbatched item first; once a receipt adds a batch, item-level adjustments are refused.
   const adjust = await enqueueOp({ userId: 'user', branchId: 'branch', opType: 'stock.adjust', opId: 'a4', entityId: 'item',
     values: { branch_item_id: 'item', delta: -1, reason_type: 'damage' } });
+  const receipt = await receive('r13', { quantity: 5, selling_price: 12 });
   const ops = await offlineDb.ops.where('userId').equals('user').toArray();
   const rows = pendingOpActivityRows(ops, 'user');
   expect(rows.map(r => r.activity_type).sort()).toEqual(['adjust_stock', 'receive_stock']);
@@ -180,7 +183,7 @@ test('backup and restore round-trip keeps stock ops with unchanged payloads', as
   const receipt = await receive('r14', { quantity: 5, selling_price: 12, batch_number: 'B9' });
   const doc = buildBackupDocument([], 'user', 'device', new Date('2026-10-29T12:00:00Z'), await offlineDb.ops.where('userId').equals('user').toArray());
   expect(doc.ops).toHaveLength(1);
-  const parsed = parseBackup(JSON.stringify(doc));
+  const parsed = parseBackup(JSON.stringify(doc), 'user');
   await offlineDb.ops.clear();
   const result = await restoreBackup(parsed, 'user');
   expect(result.restored + result.present).toBe(1);
