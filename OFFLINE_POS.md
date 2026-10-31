@@ -311,3 +311,94 @@ Applied stock work settles once into the Sales catalog snapshot and triggers cat
 - `src/test/offlineStockFormsRender.tsx` (isolated actual-form DOM regression)
 - `src/components/inventory/OfflineStockForms.test.ts` (Bun wrapper)
 - `OFFLINE_POS.md`, `roadmap.md` (Phase 3 procedures and verification)
+
+## Offline preparation (Phase 4 Feature A)
+
+Frontend only: no SQL, migrations, RLS, function deployments, or changes to `client.ts` / `.env`. The existing client, read cache, catalog path, outbox and POS lock are reused; there is no second cache or fetch layer.
+
+### What happens
+
+Right after sign-in (after first paint: idle callback, 3 s fallback) and on every reconnect, the app quietly saves what the offline pages need, so nobody has to open each page online first. It runs one request at a time. Between entries it waits for the POS lock, so checkout and sync always go first. The lock is never held across the run. The only time preparation holds it is while refreshing a Sales catalog, exactly as the Sales page already does. Preparation stops immediately when the PC is unreachable, the user signs out, or another user signs in, and it resumes on reconnect. It never runs for signed-out users or developers.
+
+Order: access data (profile, permissions, subscription, allowed branches) → Sales catalog for the active branch → Inventory → Customers / Suppliers / Medicine Codes → Overview / Activity / Account → the same for the user's other allowed branches. Owners prepare the branch they are viewing (or **All branches**) first, then All branches and every owned branch. Staff pages denied by the cached permissions are never fetched. If the subscription is not active or expiring soon, only access data is refreshed.
+
+Each dataset is re-prepared when its saved copy is older than **6 hours**, on every reconnect, and after the user's own synced changes to that dataset (confirmed sales, applied record or stock operations). **Prepare now** in the header popover forces a full run.
+
+### Exactness and safety
+
+- Every registry entry (`src/lib/offline/prepare.ts`) calls the **same shared query function** the page calls, with the page's own arguments. Inline page fetches were moved into exported functions that both use, without changing their results. Attaching the preparation AbortSignal does not change the request, so the saved copy has exactly the cache key the page asks for offline.
+- Pages re-run some ID-chunked reads while their lists load progressively (Inventory: 24 then 200 per page) and while dialogs are mounted but closed (category lists, the owner's activity drawer). Preparation reproduces those reads too.
+- Preparation requests are bound by their AbortSignal to the user and branch scope being prepared (`bindPrepare`). They never change the visible page's scope and are never answered from saved copies. A response that finishes after sign-out or a user switch is not saved under anyone.
+- An entry is marked **ready** only after every one of its cache writes, catalog transactions or Activity snapshots has completed durably. A failed request, a refused (too large) save or a thrown error marks it **failed** and keeps the previous copy and its time. Lists stop at **20,000 rows** and are marked **capped**.
+- Status per entry is stored in Dexie `meta` as `prepare:<userId>:<dataset>@<scope>` (savedAt, attemptedAt, status, rows, error). The last plan is stored as `preparePlan:<userId>`, and the owner branch order from `useOwnerBranchIds` as `prepareBranchOrder:<userId>`. No Dexie schema change.
+
+### Dataset inventory
+
+| Dataset (registry id) | Page | Scope | Page query key / source |
+| --- | --- | --- | --- |
+| access.profile | Account | user (meta) | `useAuth` profiles `select=*&id=eq.<user>` single → `profile:<user>` |
+| access.permissions (staff) | all | user (meta) | `staff_permissions` → `permissions:<user>` |
+| access.subscription | all | user (meta) | SubscriptionGuard (staff: branch owner) + `pharmacy_subscriptions` → `subscription:<user>` |
+| access.branches | all | user (meta) | `['owner-branch-ids', owner]` + BranchSelector `pharmacy_branches` → `branches:`, `branchDetails:` |
+| sales.catalog | Sales | per branch | Dexie `catalog` via `fetchCatalog`/`replaceCatalog`, `catalogSync:<user>:<branch>` |
+| inventory.items | Inventory | per scope | `['branch-inventory', scope]` (branch_items 24/200 pages, medicines, packaging, branch names) + `['branch-inventory-ingredients']` + live batch counts + has-branches |
+| inventory.categories | Inventory (Categories tab, item dialogs) | per scope | `custom_categories select=*` + `useCustomCategories(pharmacy|general)` |
+| inventory.groups | Inventory (item dialogs) | per scope | `['medicine-groups', owner|null]` |
+| codes.list | Medicine Codes | per scope | `['medicine-codes-owner', user]` + `['medicine-codes', owner]` |
+| codes.stock | Medicine Codes | per scope | `['branch-inventory', scope]` + packaging (chunks of 20) + `['mcode-batches', branches]` + `['mcode-sales', branches, 'weekly']` |
+| customers | Customers | per scope | `['customers', branch | owner:<ids> | staff:<branch>]` (+ credits, sales, credit logs) |
+| suppliers | Suppliers | per scope | `fetchSupplierList` (suppliers + supplier_debts) + purchase dialog categories |
+| overview.summary | Overview | per scope | `loadDashboardData` with report period `daily` |
+| overview.seasonal | Overview | per scope | `useSeasonalPerformance` (branch_items, medicines by 20, sale_items 12 months) |
+| overview.smart | Overview | per scope | `['smart-inventory', …]` offline path: branch_items fallback (the RPC is never cached) |
+| activity.feed | Activity Center | user (meta) | `useActivityFeed({ date })` for today and the previous 7 days; owners also the drawer's own all-time feed (limit 1000) |
+| activity.counts | Activity Center | user (meta) | `useActivityCounts` → `counts:<user>:<today>` |
+| activity.goals | Activity Center | user (meta) | `useStaffGoals` → `goals`; staff: `useGoalProgress` for each of their goals |
+| activity.leaderboard (owner) | Owner Activity Center | per scope (meta) | Leaderboard `today` → `leaderboard:[branch|null,'today',…]` |
+| activity.goalOptions (owner) | Owner Activity Center | user (meta) | GoalManager → `goalOptions` |
+
+"Per scope" means once for each prepared read-cache scope: the branch, or the owner's `owner-all`.
+
+Not covered: the Overview's other report periods and custom dates (the page opens on **daily**), dates other than the last 8 days in Activity, Leaderboard filters other than **today**, the staff drawer for a specific staff member, Inventory **Stock history** tab, Supplier analytics, creditors and intelligence tabs, per-item dialogs (batch breakdown, ledgers, customer details), and all RPC or edge-function reads. These still use the existing fallback: "Not available offline — open it once while online on this PC." Lists the server truncates at its own row limit (PostgREST max rows) are saved as the page receives them; that limit is not detectable from the client and is not reported as capped.
+
+### Storage
+
+- Read cache budget: **150 MB per user** (was 25 MB); up to **8 MB per entry** (was 2 MB) so a 20,000-row list fits.
+- Eviction is unchanged: least-recently-used **read-cache entries only**. Outbox operations, sales, catalog, `meta` and backups are never evicted.
+- Before each lower-priority dataset (Inventory and below), `navigator.storage.estimate()` is checked. Above **85%** of quota those datasets are skipped with "Storage nearly full — not prepared" and the header shows the warning. Access data and Sales catalogs continue. Previously saved copies stay usable.
+
+### Header indicator
+
+Next to the storage/backup badges:
+
+- **Preparing offline data… NN%** while running (progress over planned entries).
+- **Offline ready ✓**, with a tooltip showing the oldest saved time ("Prepared HH:MM"), when every planned entry is saved.
+- **Offline data incomplete** (amber) when any entry failed, was capped, was skipped for storage, or has not been saved yet (for example, the run was interrupted).
+- Click: per page and per branch, the saved time, failed / capped / storage status, and **Prepare now** (online only).
+
+The existing "Open it once while online" messages remain as the fallback when a dataset is still missing.
+
+### Files
+
+New: `src/lib/offline/prepareEngine.ts`, `src/lib/offline/prepare.ts`, `src/hooks/useOfflinePrepare.ts`, `src/components/offline/OfflinePrepareIndicator.tsx`, `src/lib/offline/prepareEngine.test.ts`, `src/components/offline/OfflinePrepare.test.ts`, `src/test/offlinePrepareRender.tsx`.
+
+Changed (shared query functions extracted or given an optional signal; results unchanged): `readCache.ts` (binding, `withSignal`, budget), `catalog.ts`, `useAuth.tsx`, `useStaffPermissions.tsx`, `SubscriptionGuard.tsx`, `useOwnerBranchIds.tsx`, `BranchSelector.tsx`, `useBranchInventory.tsx`, `StaffInventoryWithActions.tsx`, `CategoryManagement.tsx`, `useCustomCategories.tsx`, `useMedicineGroups.tsx`, `useMedicineCodes.tsx`, `MedicineCodes.tsx`, `useMedicineCodeAnalytics.tsx`, `useCustomers.tsx`, `SupplierManagement.tsx`, `Dashboard.tsx`, `useSeasonalPerformance.tsx`, `useSmartInventory.tsx`, `useActivityFeed.tsx`, `useActivityCounts.tsx`, `useStaffGoals.tsx`, `useGoalProgress.tsx`, `Leaderboard.tsx`, `GoalManager.tsx`, `useOfflineSync.ts` (marks datasets for re-preparation after own synced changes), `Layout.tsx` (header indicator), `readCache.test.ts` (budget expectation 25 → 150 MB).
+
+### Verification and limits
+
+- `bun test`: **230 pass, 0 fail, 752 expect() calls across 20 files** (207 existing + 23 new). The only existing assertion changed is the read-cache budget value (25 MB → 150 MB), as this feature requires.
+- `bunx -p @typescript/native-preview tsgo --noEmit -p tsconfig.app.json`: no errors. (`bunx tsgo` alone fails because no npm package is named `tsgo`; the binary ships in `@typescript/native-preview`.)
+- `bun run build`: OK; the same six Rollup chunking warnings as before this work; precache 25 entries (9,909 KiB, previously 9,885 KiB).
+- The isolated DOM check renders the real Suppliers, Customers, Inventory, Medicine Codes, Overview and Activity pages (and the Owner Activity Center for owners). It runs for a staff user and for an owner on **All branches**, with the real client and read cache and a simulated server. Every table read each page makes online was produced by preparation with the same cache key and saved under the viewed scope. Then, with an empty device prepared only by the background run, each page renders **offline** with 0 cache misses and no table reads over the network. The Overview's uncached smart-inventory RPC attempt fails and the widget uses its prepared fallback.
+- Simulated: the server, identity hooks and the network. **No device, browser, installed-app or authenticated-server verification was performed.** Real timing (idle scheduling, lock contention with real checkouts), real quota numbers and real data volumes must be checked on a PC.
+- Known existing issue (not changed here, because online behaviour must stay the same): for staff, `useOwnerBranchIds` returns a new empty array on every render. `useSeasonalPerformance` depends on it, so the staff **Overview** refetches its seasonal data continuously, both online and against the saved copy offline. Fix: return a stable empty array from `useOwnerBranchIds`. The DOM check stubs that hook for staff so it can finish.
+
+### Manual check (real PC)
+
+- [ ] Sign in online as staff and as an owner; without opening any page, watch the header go from **Preparing… NN%** to **Offline ready ✓**; open the popover and confirm each page/branch has a saved time.
+- [ ] Start a sale while preparation is running; confirm checkout is not delayed beyond one in-flight request.
+- [ ] Disconnect; open Overview, Inventory, Medicine Codes, Customers, Suppliers, Account, Activity (and Owner Activity) **for the first time on this PC**; confirm data shows with "Offline — showing data saved at HH:MM" and no "Open it once while online" message.
+- [ ] Owners: switch to another branch and to **All branches** offline; confirm each was prepared.
+- [ ] Reconnect; confirm a new run starts and finishes; make a sale, let it sync, and confirm the affected entries' saved times update.
+- [ ] Sign out during a run; sign in as another user; confirm the popover shows only the new user's entries.
+- [ ] On a nearly full disk (or a small quota), confirm the storage warning and that Sales still prepares.

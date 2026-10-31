@@ -19,4 +19,5 @@
 - Classify offline-capable routes and write controls in `src/lib/offline/offlinePages.ts` and enforce them in `OfflineReadGuard`; offline gates use only cached verified values from `gates.ts` and fail closed.
 - Preload fake IndexedDB via `bunfig.toml` so Dexie never loads before the test shim.
 
+- Background preparation lives in `src/lib/offline/prepareEngine.ts` (plan/run/status) and `prepare.ts` (registry). Every registry entry must call the page's own shared query function with the page's own arguments (never a copy of the query); bind requests with `bindPrepare` via the entry's AbortSignal so saves go to the prepared user/scope, never hold the POS lock across a run, and record an entry ready only after its writes are durable. When a page gains a read, extend its shared function or registry entry and keep `src/test/offlinePrepareRender.tsx` parity passing.
 - Keep record operations in the versioned Dexie ops table, process them as work items in the existing POS-locked sync loop, and overlay private provisional fields without changing readCache snapshots; this preserves one queue engine and immutable retries.

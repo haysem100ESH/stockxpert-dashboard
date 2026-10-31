@@ -1,11 +1,13 @@
 # Offline POS — part 1
 
 ## Offline preparation Phase 4 — Feature A
-- [ ] Share exact scoped page queries with a permission-filtered dataset registry; include paging and cap reporting
-- [ ] Idle, serial preparation after sign-in/reconnect with POS-lock coordination, cancellation and six-hour freshness
-- [ ] Raise read-only cache budget to 150 MB per user; quota warning and lower-priority stop at 85%
-- [ ] Header readiness/progress and per-page/branch details with Prepare now
-- [ ] Tests, automatic preview checks, dataset inventory and documented verification limits
+- [x] Share exact scoped page queries with a permission-filtered dataset registry; include paging and cap reporting
+- [x] Idle, serial preparation after sign-in/reconnect with POS-lock coordination, cancellation and six-hour freshness
+- [x] Raise read-only cache budget to 150 MB per user; quota warning and lower-priority stop at 85%
+- [x] Header readiness/progress and per-page/branch details with Prepare now
+- [x] Tests, dataset inventory and documented verification limits: full Bun suite 230 pass, 0 fail, 752 expect() calls across 20 files; `tsgo --noEmit -p tsconfig.app.json` clean; `bun run build` OK; no device or authenticated-server verification
+- [ ] Device check on a real PC (see OFFLINE_POS.md → Offline preparation → Manual check)
+- [ ] Follow-up (not in Feature A): stable empty `branchIds` in useOwnerBranchIds for non-owners — staff Overview refetches seasonal data in a loop
 
 ## Offline stock Phase 3
 - [x] Extend existing operations, dependencies and shared stock overlay
