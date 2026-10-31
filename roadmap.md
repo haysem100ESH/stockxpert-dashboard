@@ -1,5 +1,12 @@
 # Offline POS — part 1
 
+## Offline preparation Phase 4 — Feature A
+- [ ] Share exact scoped page queries with a permission-filtered dataset registry; include paging and cap reporting
+- [ ] Idle, serial preparation after sign-in/reconnect with POS-lock coordination, cancellation and six-hour freshness
+- [ ] Raise read-only cache budget to 150 MB per user; quota warning and lower-priority stop at 85%
+- [ ] Header readiness/progress and per-page/branch details with Prepare now
+- [ ] Tests, automatic preview checks, dataset inventory and documented verification limits
+
 ## Offline stock Phase 3
 - [x] Extend existing operations, dependencies and shared stock overlay
 - [x] Offline receive/adjust controls, cached permission and suppliers; purchases/payments remain online-only
