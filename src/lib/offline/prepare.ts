@@ -28,6 +28,7 @@ import {
 import { fetchBatchCounts, fetchHasBranches } from '@/components/inventory/StaffInventoryWithActions';
 import { fetchCategoryRows } from '@/components/inventory/CategoryManagement';
 import { fetchGroups } from '@/hooks/useMedicineGroups';
+import { fetchCustomCategoryNames } from '@/hooks/useCustomCategories';
 import { resolveOwnerId, fetchCodes } from '@/hooks/useMedicineCodes';
 import { fetchCodePackagings } from '@/components/inventory/MedicineCodes';
 import { fetchBatches, fetchSaleItems, rangeStart } from '@/hooks/useMedicineCodeAnalytics';
@@ -86,6 +87,17 @@ async function inventoryItems(ctx: DatasetContext): Promise<EnrichedBranchItem[]
   return ctx.memo.get(key) as EnrichedBranchItem[];
 }
 const capped = (rows: number, ctx: DatasetContext) => ({ rows, capped: rows >= ctx.maxRows });
+/**
+ * useCustomCategories runs inside purchase / add / edit item dialogs that the Suppliers and
+ * Inventory pages mount even while closed. The system type follows the branch type, which offline
+ * comes from cached branch details, so both (small) lists are prepared.
+ */
+async function categoryNames(ctx: DatasetContext) {
+  for (const type of ['pharmacy', 'general'] as const) {
+    const { error } = await fetchCustomCategoryNames(type, ctx.signal);
+    if (error) throw error;
+  }
+}
 const daysBack = (now: Date, n: number) => { const d = new Date(now); d.setDate(d.getDate() - n); return d; };
 
 // ---------- registry ----------
@@ -153,10 +165,11 @@ export const PREPARE_REGISTRY: DatasetDef[] = [
   {
     id: 'inventory.categories', label: 'Categories', page: 'inventory', route: '/inventory?tab=categories', permission: 'inventory',
     scope: 'branch', priority: 2, saveReads: true,
-    queryKey: 'CategoryManagement: custom_categories?select=*&order=name',
+    queryKey: 'CategoryManagement: custom_categories?select=*&order=name + useCustomCategories(pharmacy|general)',
     async run(ctx) {
       const { data, error } = await fetchCategoryRows(ctx.signal);
       if (error) throw error;
+      await categoryNames(ctx);
       return { rows: data?.length ?? 0 };
     },
   },
@@ -205,9 +218,10 @@ export const PREPARE_REGISTRY: DatasetDef[] = [
   {
     id: 'suppliers', label: 'Suppliers', page: 'suppliers', route: '/suppliers', permission: 'suppliers',
     scope: 'branch', priority: 3, saveReads: true,
-    queryKey: 'SupplierManagement.fetchSupplierList: suppliers (scope) + supplier_debts',
+    queryKey: 'SupplierManagement.fetchSupplierList: suppliers (scope) + supplier_debts + useCustomCategories (purchase dialog)',
     async run(ctx) {
       const { suppliers } = await fetchSupplierList({ selectedBranch: selectedBranchOf(ctx), role: ctx.profile.role, branchId: ctx.profile.branch_id, ownerBranchIds: ctx.ownerBranchIds }, ctx.signal);
+      await categoryNames(ctx);
       return { rows: suppliers?.length ?? 0 };
     },
   },
@@ -247,8 +261,10 @@ export const PREPARE_REGISTRY: DatasetDef[] = [
     queryKey: 'useActivityFeed({ date }) → meta activity:<user>:feed:[…]',
     async run(ctx) {
       let rows = 0;
-      for (let i = 0; i < ACTIVITY_FEED_DAYS; i++) {
-        const options = { date: daysBack(ctx.now, i) };
+      const views: Parameters<typeof loadActivityFeed>[1][] = Array.from({ length: ACTIVITY_FEED_DAYS }, (_, i) => ({ date: daysBack(ctx.now, i) }));
+      // Owner Activity Center mounts the staff drawer while closed: no staff selected = own all-time feed.
+      if (isOwner(ctx)) views.push({ userId: undefined, limit: 1000, from: undefined, to: undefined });
+      for (const options of views) {
         const data = await loadActivityFeed(ctx.userId, options, ctx.signal);
         await saveActivityCache(ctx.userId, activityFeedScope(ctx.userId, options), data);
         rows += data.length;

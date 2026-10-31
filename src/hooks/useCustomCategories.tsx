@@ -1,5 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/db';
+import { withSignal } from '@/lib/offline/readCache';
+
+/** Shared with offline preparation (dialogs mounted on Suppliers/Inventory run this even while closed). */
+export const fetchCustomCategoryNames = (systemType: 'pharmacy' | 'general', signal?: AbortSignal) =>
+  withSignal(supabase
+    .from('custom_categories')
+    .select('name')
+    .eq('system_type', systemType)
+    .order('name'), signal);
 
 export function useCustomCategories(systemType: 'pharmacy' | 'general') {
   const [categories, setCategories] = useState<string[]>([]);
@@ -7,11 +16,7 @@ export function useCustomCategories(systemType: 'pharmacy' | 'general') {
 
   const fetchCategories = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from('custom_categories')
-      .select('name')
-      .eq('system_type', systemType)
-      .order('name');
+    const { data } = await fetchCustomCategoryNames(systemType);
 
     const customNames = (data || []).map((c: { name: string }) => c.name);
     setCategories(customNames);

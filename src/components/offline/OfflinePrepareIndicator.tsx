@@ -9,30 +9,8 @@ import { useOfflineStatus } from '@/lib/offline/store';
 import { readMeta } from '@/lib/offline/db';
 import type { CachedBranch } from '@/lib/offline/catalog';
 import {
-  indicatorState, usePrepareStatus, requestPreparation, PREPARE_PAGE_LABELS, type ShownEntry, type IndicatorState,
+  indicatorState, indicatorLabel, entryStatusText, usePrepareStatus, requestPreparation, PREPARE_PAGE_LABELS, type ShownEntry,
 } from '@/lib/offline/prepare';
-
-const hhmm = (iso?: string) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-
-/** Badge text/tooltip for an indicator state (pure, shared with tests). */
-export function indicatorLabel(state: IndicatorState): { text: string; tone: 'ok' | 'busy' | 'warn' | 'none'; title?: string } {
-  switch (state.kind) {
-    case 'preparing': return { text: `Preparing offline data… ${state.percent}%`, tone: 'busy' };
-    case 'ready': return { text: 'Offline ready ✓', tone: 'ok', title: `Prepared ${hhmm(state.preparedAt)}` };
-    case 'incomplete': return { text: 'Offline data incomplete', tone: 'warn', title: 'Some offline data could not be prepared. Open for details.' };
-    default: return { text: '', tone: 'none' };
-  }
-}
-export function entryStatusText(entry: ShownEntry): string {
-  const saved = entry.savedAt ? `saved ${hhmm(entry.savedAt)}` : 'not saved yet';
-  switch (entry.status) {
-    case 'ready': return saved;
-    case 'capped': return `capped — ${entry.error ?? 'only part of the list was saved'} (${saved})`;
-    case 'failed': return `failed — ${entry.error ?? 'request failed'}${entry.savedAt ? ` (previous copy ${saved})` : ''}`;
-    case 'skipped': return `${entry.error ?? 'not prepared'}${entry.savedAt ? ` (previous copy ${saved})` : ''}`;
-    default: return 'waiting to be prepared';
-  }
-}
 
 /** Header indicator + background preparation scheduler (mounted once in the signed-in header). */
 export default function OfflinePrepareIndicator() {
