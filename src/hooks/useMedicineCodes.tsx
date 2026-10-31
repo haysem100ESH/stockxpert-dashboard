@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/db';
 import { useAuth } from './useAuth';
 import { logActivity } from '@/lib/activityLog';
+import { withSignal } from '@/lib/offline/readCache';
 
 export interface MedicineCode {
   id: string;
@@ -26,27 +27,29 @@ export interface MedicineCode {
 
 const KEY = 'medicine-codes';
 
-async function resolveOwnerId(profile: any): Promise<string | null> {
+/** Shared with offline preparation. */
+export async function resolveOwnerId(profile: any, signal?: AbortSignal): Promise<string | null> {
   if (!profile) return null;
   if (profile.role === 'owner') return profile.id;
   if (profile.role === 'staff' && profile.branch_id) {
-    const { data } = await supabase
+    const { data } = await withSignal(supabase
       .from('pharmacy_branches')
       .select('pharmacy_owner_id')
       .eq('id', profile.branch_id)
-      .single();
+      .single(), signal);
     return (data as any)?.pharmacy_owner_id ?? null;
   }
   return null;
 }
 
-async function fetchCodes(ownerId: string | null): Promise<MedicineCode[]> {
+/** Shared with offline preparation. */
+export async function fetchCodes(ownerId: string | null, signal?: AbortSignal): Promise<MedicineCode[]> {
   if (!ownerId) return [];
-  const { data, error } = await (supabase as any)
+  const { data, error } = await withSignal((supabase as any)
     .from('medicine_codes')
     .select('id, owner_id, code, label, notes, created_at, updated_at')
     .eq('owner_id', ownerId)
-    .order('code');
+    .order('code'), signal);
   if (error) {
     // Table may not exist yet — fail soft.
     if ((error as any).code === '42P01') return [];

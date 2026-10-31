@@ -30,8 +30,38 @@ import { formatMedicineName, formatPackaging } from '@/lib/medicineDisplay';
 import { formatStock } from '@/lib/packaging';
 import { canEnqueueOp } from '@/lib/offline/ops';
 import { liveQuery } from 'dexie';
+import { chunkedInPartial } from '@/lib/supabaseBatch';
+import { withSignal } from '@/lib/offline/readCache';
 
 const ITEMS_PER_PAGE = 24;
+
+/** Shared with offline preparation: live batch counts for the final item list (chunks of 50 IDs). */
+export async function fetchBatchCounts(ids: string[], signal?: AbortSignal): Promise<{ counts: Record<string, number>; failed: boolean }> {
+  // Chunk + retry: previously this sent one massive .in() with hundreds of
+  // branch_item_id UUIDs, which would silently fail on slow connections
+  // and leave batch badges blank.
+  const { data, failed } = await chunkedInPartial<any>(ids, (chunk) =>
+    withSignal(supabase
+      .from('inventory_batches')
+      .select('branch_item_id')
+      .in('branch_item_id', chunk)
+      .gt('remaining_quantity', 0), signal)
+  );
+  const counts: Record<string, number> = {};
+  data.forEach((r: any) => { counts[r.branch_item_id] = (counts[r.branch_item_id] || 0) + 1; });
+  return { counts, failed };
+}
+
+/** Shared with offline preparation: does this owner/staff see any branch at all? */
+export async function fetchHasBranches(profile: { id: string; role: string } | null, signal?: AbortSignal): Promise<boolean> {
+  let query = supabase.from('pharmacy_branches').select('id').limit(1);
+  if (profile?.role === 'owner' && profile?.id) {
+    query = query.eq('pharmacy_owner_id', profile.id);
+  }
+  const { data, error } = await withSignal(query, signal);
+  if (error) throw error;
+  return !!data && data.length > 0;
+}
 
 export default function StaffInventoryWithActions() {
   const [searchParams] = useSearchParams();
@@ -76,20 +106,8 @@ export default function StaffInventoryWithActions() {
     const ids = branchItems.map((i: any) => i.id);
     let cancelled = false;
     (async () => {
-      // Chunk + retry: previously this sent one massive .in() with hundreds of
-      // branch_item_id UUIDs, which would silently fail on slow connections
-      // and leave batch badges blank.
-      const { chunkedInPartial } = await import('@/lib/supabaseBatch');
-      const { data } = await chunkedInPartial<any>(ids, (chunk) =>
-        supabase
-          .from('inventory_batches')
-          .select('branch_item_id')
-          .in('branch_item_id', chunk)
-          .gt('remaining_quantity', 0)
-      );
+      const { counts } = await fetchBatchCounts(ids);
       if (cancelled) return;
-      const counts: Record<string, number> = {};
-      data.forEach((r: any) => { counts[r.branch_item_id] = (counts[r.branch_item_id] || 0) + 1; });
       setBatchCounts(counts);
     })();
     return () => { cancelled = true; };
@@ -106,13 +124,7 @@ export default function StaffInventoryWithActions() {
 
   const checkBranches = async () => {
     try {
-      let query = supabase.from('pharmacy_branches').select('id').limit(1);
-      if (profile?.role === 'owner' && profile?.id) {
-        query = query.eq('pharmacy_owner_id', profile.id);
-      }
-      const { data, error } = await query;
-      if (error) throw error;
-      setHasBranches(data && data.length > 0);
+      setHasBranches(await fetchHasBranches(profile));
     } catch (error) {
       console.error('Error checking branches:', error);
     }

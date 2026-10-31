@@ -8,6 +8,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/db';
 import { useAuth } from './useAuth';
+import { withSignal } from '@/lib/offline/readCache';
 
 export interface MedicineGroup {
   id: string;
@@ -18,12 +19,13 @@ export interface MedicineGroup {
 
 const KEY = 'medicine-groups';
 
-async function fetchGroups(ownerId: string | null): Promise<MedicineGroup[]> {
-  const { data, error } = await (supabase as any)
+/** Shared with offline preparation; owner ID is the owner's own ID, null for staff (as in the hook). */
+export async function fetchGroups(ownerId: string | null, signal?: AbortSignal): Promise<MedicineGroup[]> {
+  const { data, error } = await withSignal((supabase as any)
     .from('medicine_groups')
     .select('id, name, is_default, owner_id')
     .or(ownerId ? `is_default.eq.true,owner_id.eq.${ownerId}` : 'is_default.eq.true')
-    .order('name');
+    .order('name'), signal);
   if (error) throw error;
   return (data || []) as MedicineGroup[];
 }

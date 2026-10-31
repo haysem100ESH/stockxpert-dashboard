@@ -9,6 +9,7 @@ import { supabase } from '@/lib/db';
 import { useToast } from '@/hooks/use-toast';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { logActivity } from '@/lib/activityLog';
+import { withSignal } from '@/lib/offline/readCache';
 
 interface Category {
   id: string;
@@ -16,6 +17,13 @@ interface Category {
   system_type: string;
   owner_id: string;
 }
+
+/** Shared with offline preparation (Inventory → Categories tab). */
+export const fetchCategoryRows = (signal?: AbortSignal) =>
+  withSignal(supabase
+    .from('custom_categories')
+    .select('*')
+    .order('name'), signal);
 
 export default function CategoryManagement() {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -32,10 +40,7 @@ export default function CategoryManagement() {
   }, []);
 
   const fetchCategories = async () => {
-    const { data, error } = await supabase
-      .from('custom_categories')
-      .select('*')
-      .order('name');
+    const { data, error } = await fetchCategoryRows();
     if (error) {
       toast({ title: 'Error', description: 'Failed to load categories', variant: 'destructive' });
       return;

@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useBranchContext } from '@/hooks/useBranchContext';
 import { useOwnerBranchIds } from '@/hooks/useOwnerBranchIds';
 import { chunkedInPartial } from '@/lib/supabaseBatch';
+import { withSignal } from '@/lib/offline/readCache';
 
 export interface MonthlyData {
   month: number; // 1-12
@@ -62,6 +63,130 @@ function generateInsight(item: SeasonalItem): string | null {
   return `${item.name} has seasonal demand across ${strongMonths.length} months, peaking in ${item.peakMonthName} at ${Math.round(peakStrength)}% of average.`;
 }
 
+/**
+ * Shared with offline preparation (pass a bound `signal`): same requests and result as the hook.
+ * Returns [] when there is nothing to show.
+ */
+export async function fetchSeasonalItems(branchIds: string[], currentMonth: number, signal?: AbortSignal): Promise<SeasonalItem[]> {
+  if (branchIds.length === 0) return [];
+
+  // Fetch branch_items for the selected branches, then resolve master catalog
+  // (medicines) details. The legacy `medicines.branch_id` column is null for
+  // master catalog items, which is why the previous direct query returned [].
+  const { data: branchItems } = await withSignal(supabase
+    .from('branch_items')
+    .select('medicine_id, branch_id')
+    .in('branch_id', branchIds), signal);
+
+  const medIds = [...new Set((branchItems || []).map((bi: any) => bi.medicine_id).filter(Boolean))] as string[];
+  if (medIds.length === 0) return [];
+
+  const medicineBatchSize = 20;
+  console.log(`[Supabase batching] medicines id/name/category by id: ${Math.ceil(medIds.length / medicineBatchSize)} batches for ${medIds.length} ids`);
+  const { data: medicines } = await chunkedInPartial<any>(medIds, (ids) =>
+    withSignal(supabase
+      .from('medicines')
+      .select('id, name, category')
+      .in('id', ids), signal)
+  , medicineBatchSize);
+
+  if (!medicines || medicines.length === 0) return [];
+
+  // Fetch all historical sales (up to 12 months back), scoped to the branches.
+  const oneYearAgo = new Date();
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+  const sinceDay = oneYearAgo.toISOString().slice(0, 10);
+  const { data: salesData } = await withSignal(supabase
+    .from('sale_items')
+    .select('medicine_id, pack_quantity, strip_quantity, quantity, created_at, sales!inner(branch_id, sale_date, created_at)')
+    .in('sales.branch_id', branchIds)
+    .gte('sales.sale_date', sinceDay), signal);
+
+  // Build monthly sales map: medicine_id -> month -> { qty, freq }
+  const monthlyMap: Record<string, Record<number, { qty: number; freq: number }>> = {};
+
+  (salesData || []).forEach((sale: any) => {
+    const id = sale.medicine_id;
+    // Prefer the business sale_date for grouping; fall back to created_at.
+    const saleDate = new Date(sale.sales?.sale_date || sale.sales?.created_at || sale.created_at);
+    const month = saleDate.getMonth() + 1; // 1-12
+    // Support both legacy `quantity` column and pack/strip split
+    const packStripQty = (sale.pack_quantity || 0) + (sale.strip_quantity || 0);
+    const qty = packStripQty > 0 ? packStripQty : (sale.quantity || 0);
+
+    if (!monthlyMap[id]) monthlyMap[id] = {};
+    if (!monthlyMap[id][month]) monthlyMap[id][month] = { qty: 0, freq: 0 };
+
+    monthlyMap[id][month].qty += qty;
+    monthlyMap[id][month].freq += 1;
+  });
+
+  // Build seasonal items
+  const seasonalItems: SeasonalItem[] = medicines.map((med: any) => {
+    const monthData = monthlyMap[med.id] || {};
+
+    const monthly: MonthlyData[] = Array.from({ length: 12 }, (_, i) => {
+      const m = i + 1;
+      const data = monthData[m] || { qty: 0, freq: 0 };
+      return {
+        month: m,
+        monthName: SHORT_MONTHS[i],
+        quantity: data.qty,
+        frequency: data.freq,
+      };
+    });
+
+    const yearlyTotal = monthly.reduce((sum, m) => sum + m.quantity, 0);
+    const yearlyAvg = yearlyTotal / 12;
+
+    const seasonalStrengths = monthly.map(m =>
+      yearlyAvg > 0 ? (m.quantity / yearlyAvg) * 100 : 0
+    );
+
+    let peakMonth = 1;
+    let peakQuantity = 0;
+    monthly.forEach(m => {
+      if (m.quantity > peakQuantity) {
+        peakQuantity = m.quantity;
+        peakMonth = m.month;
+      }
+    });
+
+    const currentMonthStrength = seasonalStrengths[currentMonth - 1] || 0;
+
+    const item: SeasonalItem = {
+      id: med.id,
+      name: med.name,
+      category: med.category || 'Uncategorized',
+      monthly,
+      peakMonth,
+      peakMonthName: MONTH_NAMES[peakMonth - 1],
+      peakQuantity,
+      yearlyTotal,
+      yearlyAvg,
+      seasonalStrengths,
+      insight: null,
+      currentMonthStrength,
+    };
+
+    item.insight = generateInsight(item);
+    return item;
+  });
+
+  // Sort by yearly total descending
+  seasonalItems.sort((a, b) => b.yearlyTotal - a.yearlyTotal);
+  return seasonalItems;
+}
+
+/** Branch scope exactly as the hook resolves it. */
+export function seasonalBranchIds(selectedBranch: string | null, profile: { id: string; role: string; branch_id?: string | null }, ownerBranchIds: string[]): string[] {
+  if (selectedBranch) return [selectedBranch];
+  if (profile.role === 'owner' && profile.id) return ownerBranchIds;
+  if (profile.branch_id) return [profile.branch_id];
+  return [];
+}
+
 export function useSeasonalPerformance() {
   const [items, setItems] = useState<SeasonalItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,136 +201,8 @@ export function useSeasonalPerformance() {
     setLoading(true);
 
     try {
-      let branchIds: string[] = [];
-      if (selectedBranch) {
-        branchIds = [selectedBranch];
-      } else if (profile.role === 'owner' && profile.id) {
-        branchIds = cachedOwnerBranchIds;
-      } else if (profile.branch_id) {
-        branchIds = [profile.branch_id];
-      }
-
-      if (branchIds.length === 0) {
-        setItems([]);
-        setLoading(false);
-        return;
-      }
-
-      // Fetch branch_items for the selected branches, then resolve master catalog
-      // (medicines) details. The legacy `medicines.branch_id` column is null for
-      // master catalog items, which is why the previous direct query returned [].
-      const { data: branchItems } = await supabase
-        .from('branch_items')
-        .select('medicine_id, branch_id')
-        .in('branch_id', branchIds);
-
-      const medIds = [...new Set((branchItems || []).map((bi: any) => bi.medicine_id).filter(Boolean))] as string[];
-      if (medIds.length === 0) {
-        setItems([]);
-        setLoading(false);
-        return;
-      }
-
-      const medicineBatchSize = 20;
-      console.log(`[Supabase batching] medicines id/name/category by id: ${Math.ceil(medIds.length / medicineBatchSize)} batches for ${medIds.length} ids`);
-      const { data: medicines } = await chunkedInPartial<any>(medIds, (ids) =>
-        supabase
-          .from('medicines')
-          .select('id, name, category')
-          .in('id', ids)
-      , medicineBatchSize);
-
-      if (!medicines || medicines.length === 0) {
-        setItems([]);
-        setLoading(false);
-        return;
-      }
-
-      // Fetch all historical sales (up to 12 months back), scoped to the branches.
-      const oneYearAgo = new Date();
-      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-
-      const sinceDay = oneYearAgo.toISOString().slice(0, 10);
-      const { data: salesData } = await supabase
-        .from('sale_items')
-        .select('medicine_id, pack_quantity, strip_quantity, quantity, created_at, sales!inner(branch_id, sale_date, created_at)')
-        .in('sales.branch_id', branchIds)
-        .gte('sales.sale_date', sinceDay);
-
-      // Build monthly sales map: medicine_id -> month -> { qty, freq }
-      const monthlyMap: Record<string, Record<number, { qty: number; freq: number }>> = {};
-
-      (salesData || []).forEach((sale: any) => {
-        const id = sale.medicine_id;
-        // Prefer the business sale_date for grouping; fall back to created_at.
-        const saleDate = new Date(sale.sales?.sale_date || sale.sales?.created_at || sale.created_at);
-        const month = saleDate.getMonth() + 1; // 1-12
-        // Support both legacy `quantity` column and pack/strip split
-        const packStripQty = (sale.pack_quantity || 0) + (sale.strip_quantity || 0);
-        const qty = packStripQty > 0 ? packStripQty : (sale.quantity || 0);
-
-        if (!monthlyMap[id]) monthlyMap[id] = {};
-        if (!monthlyMap[id][month]) monthlyMap[id][month] = { qty: 0, freq: 0 };
-
-        monthlyMap[id][month].qty += qty;
-        monthlyMap[id][month].freq += 1;
-      });
-
-      // Build seasonal items
-      const seasonalItems: SeasonalItem[] = medicines.map((med: any) => {
-        const monthData = monthlyMap[med.id] || {};
-
-        const monthly: MonthlyData[] = Array.from({ length: 12 }, (_, i) => {
-          const m = i + 1;
-          const data = monthData[m] || { qty: 0, freq: 0 };
-          return {
-            month: m,
-            monthName: SHORT_MONTHS[i],
-            quantity: data.qty,
-            frequency: data.freq,
-          };
-        });
-
-        const yearlyTotal = monthly.reduce((sum, m) => sum + m.quantity, 0);
-        const yearlyAvg = yearlyTotal / 12;
-
-        const seasonalStrengths = monthly.map(m =>
-          yearlyAvg > 0 ? (m.quantity / yearlyAvg) * 100 : 0
-        );
-
-        let peakMonth = 1;
-        let peakQuantity = 0;
-        monthly.forEach(m => {
-          if (m.quantity > peakQuantity) {
-            peakQuantity = m.quantity;
-            peakMonth = m.month;
-          }
-        });
-
-        const currentMonthStrength = seasonalStrengths[currentMonth - 1] || 0;
-
-        const item: SeasonalItem = {
-          id: med.id,
-          name: med.name,
-          category: med.category || 'Uncategorized',
-          monthly,
-          peakMonth,
-          peakMonthName: MONTH_NAMES[peakMonth - 1],
-          peakQuantity,
-          yearlyTotal,
-          yearlyAvg,
-          seasonalStrengths,
-          insight: null,
-          currentMonthStrength,
-        };
-
-        item.insight = generateInsight(item);
-        return item;
-      });
-
-      // Sort by yearly total descending
-      seasonalItems.sort((a, b) => b.yearlyTotal - a.yearlyTotal);
-      setItems(seasonalItems);
+      const branchIds = seasonalBranchIds(selectedBranch, profile, cachedOwnerBranchIds);
+      setItems(await fetchSeasonalItems(branchIds, currentMonth));
     } catch (error) {
       console.error('Error fetching seasonal data:', error);
     } finally {

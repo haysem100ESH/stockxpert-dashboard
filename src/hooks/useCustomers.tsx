@@ -18,6 +18,7 @@ import { getCreditLimit } from './useCreditScore';
 import { resolveCreditLimit } from '@/lib/creditLimit';
 import { useAuth } from './useAuth';
 import { useOwnerBranchIds } from './useOwnerBranchIds';
+import { withSignal } from '@/lib/offline/readCache';
 
 export interface CustomerRow {
   id: string;
@@ -39,11 +40,13 @@ export interface CustomerRow {
   max_credit_limit: number;
 }
 
-async function fetchCustomers(
+/** Shared with offline preparation (pass a bound `signal`). */
+export async function fetchCustomers(
   selectedBranch: string | null,
   ownerBranchIds: string[],
   isOwner: boolean,
   staffBranchId: string | null,
+  signal?: AbortSignal,
 ): Promise<CustomerRow[]> {
   let query = (supabase as any).from('customers').select('*').order('name');
   if (selectedBranch) {
@@ -54,7 +57,7 @@ async function fetchCustomers(
   } else if (staffBranchId) {
     query = query.eq('branch_id', staffBranchId);
   }
-  const { data: customersData, error } = await query;
+  const { data: customersData, error } = await withSignal(query, signal);
   if (error) throw error;
 
   const customerIds: string[] = (customersData || [])
@@ -65,20 +68,20 @@ async function fetchCustomers(
 
   // Parallel: credits, sales, credit_logs
   const [creditsRes, salesRes, logsRes] = await Promise.all([
-    (supabase as any)
+    withSignal((supabase as any)
       .from('customer_credits')
       .select('customer_id, total_debt')
-      .in('customer_id', customerIds),
-    (supabase as any)
+      .in('customer_id', customerIds), signal),
+    withSignal((supabase as any)
       .from('sales')
       .select('customer_id, total_amount, created_at')
       .in('customer_id', customerIds)
-      .order('created_at', { ascending: false }),
-    (supabase as any)
+      .order('created_at', { ascending: false }), signal),
+    withSignal((supabase as any)
       .from('credit_logs')
       .select('customer_id, new_score, created_at')
       .in('customer_id', customerIds)
-      .order('created_at', { ascending: false }),
+      .order('created_at', { ascending: false }), signal),
   ]);
 
   const debtMap: Record<string, number> = {};

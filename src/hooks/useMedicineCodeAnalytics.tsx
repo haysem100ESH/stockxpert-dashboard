@@ -15,6 +15,7 @@ import { useAuth } from './useAuth';
 import { useBranchContext } from './useBranchContext';
 import { useOwnerBranchIds } from './useOwnerBranchIds';
 import { useExpiryThreshold } from './useExpiryThreshold';
+import { withSignal } from '@/lib/offline/readCache';
 
 export interface BatchRow {
   id: string;
@@ -54,20 +55,21 @@ function useScopedBranchIds(): { branchIds: string[]; ready: boolean } {
   return { branchIds: [], ready: true };
 }
 
-async function fetchBatches(branchIds: string[]): Promise<BatchRow[]> {
+/** Shared with offline preparation. */
+export async function fetchBatches(branchIds: string[], signal?: AbortSignal): Promise<BatchRow[]> {
   if (branchIds.length === 0) return [];
-  const { data, error } = await (supabase as any)
+  const { data, error } = await withSignal((supabase as any)
     .from('inventory_batches')
     .select('id, branch_item_id, medicine_id, batch_number, remaining_quantity, expiry_date, expiry_alert_days, purchase_price, selling_price, branch_id')
     .in('branch_id', branchIds)
-    .range(0, 49999);
+    .range(0, 49999), signal);
   if (error) throw error;
   return (data || []) as BatchRow[];
 }
 
 export type SalesRange = 'daily' | 'weekly' | 'monthly';
 
-function rangeStart(range: SalesRange): Date {
+export function rangeStart(range: SalesRange): Date {
   const d = new Date(); d.setHours(0, 0, 0, 0);
   if (range === 'daily') return d;
   if (range === 'weekly') {
@@ -85,15 +87,16 @@ export interface SaleItemRow {
   created_at: string;
 }
 
-async function fetchSaleItems(branchIds: string[], since: Date): Promise<SaleItemRow[]> {
+/** Shared with offline preparation. */
+export async function fetchSaleItems(branchIds: string[], since: Date, signal?: AbortSignal): Promise<SaleItemRow[]> {
   if (branchIds.length === 0) return [];
   const sinceDay = since.toISOString().slice(0, 10);
-  const { data, error } = await (supabase as any)
+  const { data, error } = await withSignal((supabase as any)
     .from('sale_items')
     .select('medicine_id, quantity, total_price, created_at, sales!inner(branch_id, sale_date, created_at)')
     .in('sales.branch_id', branchIds)
     .gte('sales.sale_date', sinceDay)
-    .range(0, 49999);
+    .range(0, 49999), signal);
   if (error) throw error;
   return ((data || []) as any[]).map((r) => ({
     medicine_id: r.medicine_id,

@@ -5,6 +5,7 @@ import { cacheMeta, readMeta } from '@/lib/offline/db';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { useAuth } from '@/hooks/useAuth';
 import { loadOfflineBranches } from '@/lib/offline/gates';
+import { withSignal } from '@/lib/offline/readCache';
 
 interface Branch {
   id: string;
@@ -13,6 +14,25 @@ interface Branch {
   branch_type: string;
   /** Offline only: false when this branch was never opened on this PC. */
   available?: boolean;
+}
+
+/** Shared by the selector and offline preparation: same request, same cached branch details/IDs. */
+export async function fetchAndCacheBranchDetails(profile: { id: string; role: string }, signal?: AbortSignal): Promise<Branch[]> {
+  let query = supabase
+    .from('pharmacy_branches')
+    .select('id, name, is_main_branch, branch_type')
+    .order('is_main_branch', { ascending: false })
+    .order('created_at', { ascending: true });
+
+  if (profile?.role === 'owner' && profile?.id) {
+    query = query.eq('pharmacy_owner_id', profile.id);
+  }
+
+  const { data, error } = await withSignal(query, signal);
+  if (error) throw error;
+  await cacheMeta(`branchDetails:${profile.id}`, data || []);
+  await cacheMeta(`branches:${profile.id}`, (data || []).map((branch: Branch) => branch.id));
+  return data || [];
 }
 
 interface BranchSelectorProps {
@@ -36,21 +56,7 @@ export default function BranchSelector({ selectedBranch, onBranchChange, showAll
         setBranches(offline.branches); setAllAvailable(offline.allAvailable); return;
       }
       setAllAvailable(true);
-      let query = supabase
-        .from('pharmacy_branches')
-        .select('id, name, is_main_branch, branch_type')
-        .order('is_main_branch', { ascending: false })
-        .order('created_at', { ascending: true });
-
-      if (profile?.role === 'owner' && profile?.id) {
-        query = query.eq('pharmacy_owner_id', profile.id);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      setBranches(data || []);
-      await cacheMeta(`branchDetails:${profile.id}`, data || []);
-      await cacheMeta(`branches:${profile.id}`, (data || []).map((branch: Branch) => branch.id));
+      setBranches(await fetchAndCacheBranchDetails(profile));
     } catch (error) {
       setBranches(await readMeta<Branch[]>(`branchDetails:${profile.id}`).catch(() => undefined) ?? []);
     } finally {

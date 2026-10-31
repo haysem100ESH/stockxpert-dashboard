@@ -20,6 +20,7 @@ import SeasonalTrendsWidget from '@/components/smart-inventory/SeasonalTrendsWid
 import ScoreOverview from '@/components/smart-inventory/ScoreOverview';
 import { useSmartInventory } from '@/hooks/useSmartInventory';
 import { addisDayString, addisDayOffset, addisPeriodStartDay } from '@/lib/timezone';
+import { withSignal } from '@/lib/offline/readCache';
 interface DashboardStats {
   totalRevenue: number;
   totalProducts: number;
@@ -87,6 +88,411 @@ interface IncomeExpenseData {
   expenses: number;
 }
 
+export function dashboardDateRange(reportPeriod: string, customDate?: Date) {
+  const now = new Date();
+  if (customDate) {
+    return { 
+      start: startOfDay(customDate), 
+      end: endOfDay(customDate) 
+    };
+  }
+  
+  switch (reportPeriod) {
+    case 'daily': return { start: startOfDay(now), end: endOfDay(now) };
+    case 'weekly': return { start: subWeeks(now, 1), end: now };
+    case 'monthly': return { start: subMonths(now, 1), end: now };
+    case 'yearly': return { start: subYears(now, 1), end: now };
+    default: return { start: subMonths(now, 1), end: now };
+  }
+}
+
+export interface DashboardParams {
+  profile: { id: string; role: string; branch_id?: string | null } | null;
+  selectedBranch: string | null;
+  userBranch: string | null;
+  reportPeriod: string;
+  customDate?: Date;
+}
+export interface DashboardResult {
+  stats: DashboardStats;
+  outOfStockItems: OutOfStockItem[];
+  lowStockItems: LowStockItem[];
+  expiringItems: ExpiringItem[];
+  expiredItems: ExpiredItem[];
+  categorySales: CategorySalesData[];
+  productPerformance: ProductPerformanceData[];
+  incomeExpenseData: IncomeExpenseData[];
+  paymentMethodData: PaymentMethodData[];
+  totalGroups: number;
+  topGroupSales: GroupSalesData[];
+}
+const EMPTY_DASHBOARD: DashboardResult = {
+  stats: { totalRevenue: 0, totalProducts: 0, todaySales: 0, lowStockItems: 0, outOfStockItems: 0, expiredItems: 0 },
+  outOfStockItems: [], lowStockItems: [], expiringItems: [], expiredItems: [],
+  categorySales: [], productPerformance: [], incomeExpenseData: [], paymentMethodData: [],
+  totalGroups: 0, topGroupSales: [],
+};
+
+/**
+ * Overview data, shared by the page and offline preparation (pass a bound `signal`).
+ * Requests, filters and derived values are exactly the page's.
+ */
+export async function loadDashboardData({ profile, selectedBranch, userBranch, reportPeriod, customDate }: DashboardParams, signal?: AbortSignal): Promise<DashboardResult> {
+  const { start, end } = dashboardDateRange(reportPeriod, customDate);
+  
+  // Determine which branch to filter by (staff fixed to their branch)
+  const effectiveBranchId = profile?.role === 'staff' ? userBranch : selectedBranch;
+
+  // Owner isolation: fetch owner's branch IDs when "All Branches"
+  let ownerBranchIds: string[] = [];
+  if (!effectiveBranchId && profile?.role === 'owner' && profile?.id) {
+    const { data: ownerBranches } = await withSignal(supabase
+      .from('pharmacy_branches')
+      .select('id')
+      .eq('pharmacy_owner_id', profile.id), signal);
+    ownerBranchIds = (ownerBranches || []).map((b: any) => b.id);
+  }
+
+  // If owner has no branches yet, show empty data
+  if (!effectiveBranchId && ownerBranchIds.length === 0 && profile?.role === 'owner') {
+    return EMPTY_DASHBOARD;
+  }
+  
+  // Fetch revenue for the selected period — filter by business sale_date
+  // in Africa/Addis_Ababa time so "today"/"this week" match the Ethiopian
+  // calendar day regardless of the browser's timezone.
+  const startDay = customDate
+    ? addisDayString(customDate)
+    : addisPeriodStartDay(reportPeriod as any);
+  const endDay = customDate ? addisDayString(customDate) : addisDayString();
+  let salesQuery = supabase
+    .from('sales')
+    .select('total_amount, extra_profit, created_at, sale_date, payment_method, discount_amount')
+    .gte('sale_date', startDay)
+    .lte('sale_date', endDay);
+  
+  if (profile?.role === 'staff') {
+    salesQuery = salesQuery.eq('branch_id', userBranch || profile?.branch_id);
+  } else if (effectiveBranchId) {
+    salesQuery = salesQuery.eq('branch_id', effectiveBranchId);
+  } else if (ownerBranchIds.length > 0) {
+    salesQuery = salesQuery.in('branch_id', ownerBranchIds);
+  }
+  const { data: salesData } = await withSignal(salesQuery, signal);
+  
+  const totalRevenue =
+    salesData?.reduce(
+      (sum, sale: any) => sum + Number(sale.total_amount) + Number(sale.extra_profit || 0),
+      0,
+    ) || 0;
+
+  // CRITICAL: Inventory metrics MUST come from `branch_items` (per-branch stock),
+  // never from `medicines` (the global master catalog). `medicines` rows can
+  // outlive their `branch_items` (e.g. after a branch removal) and have no
+  // meaningful `branch_id` column, so any filter applied to it is silently
+  // ignored — that was the source of the "26 products" leak.
+  const applyBranchFilter = (q: any) => {
+    if (profile?.role === 'staff') return q.eq('branch_id', userBranch || profile?.branch_id);
+    if (effectiveBranchId) return q.eq('branch_id', effectiveBranchId);
+    if (ownerBranchIds.length > 0) return q.in('branch_id', ownerBranchIds);
+    return q;
+  };
+
+  // Single branch_items fetch powers totals + low/out-of-stock + expiry cards.
+  const branchItemsQuery = applyBranchFilter(
+    supabase
+      .from('branch_items')
+      .select('id, quantity, expiry_date, medicines!inner(name, category, minimum_stock_level)')
+      .range(0, 49999)
+  );
+  const { data: branchItemsData } = await withSignal(branchItemsQuery, signal);
+  const biRows: any[] = branchItemsData || [];
+
+  const totalProducts = biRows.length;
+  const lowStockItems = biRows.filter((bi) =>
+    bi.quantity > 0 && bi.quantity <= (bi.medicines?.minimum_stock_level ?? 0)
+  ).length;
+  const outOfStockItems = biRows.filter((bi) => bi.quantity === 0).length;
+
+  // Fetch sales count for the selected period
+  const periodSalesQuery = applyBranchFilter(
+    supabase
+      .from('sales')
+      .select('id')
+      .gte('sale_date', startDay)
+      .lte('sale_date', endDay)
+  );
+  const { data: periodSalesData } = await withSignal(periodSalesQuery, signal);
+  const todaySales = periodSalesData?.length || 0;
+
+  // Derive inventory alert lists from the same branch_items snapshot.
+  const outOfStockDetails = biRows
+    .filter((bi) => bi.quantity === 0)
+    .map((bi) => ({
+      id: bi.id,
+      name: bi.medicines?.name || 'Unknown',
+      category: bi.medicines?.category || '',
+      stock_quantity: 0,
+    }));
+
+  const lowStockDetails = biRows
+    .filter((bi) => bi.quantity > 0 && bi.quantity <= (bi.medicines?.minimum_stock_level ?? 0))
+    .map((bi) => ({
+      id: bi.id,
+      name: bi.medicines?.name || 'Unknown',
+      category: bi.medicines?.category || '',
+      stock_quantity: bi.quantity,
+      minimum_stock_level: bi.medicines?.minimum_stock_level ?? 0,
+    }));
+
+  const todayStr = addisDayString();
+  const thirtyStr = addisDayOffset(30);
+
+  // Pull batch-level expiry data (the real source of truth — items can have
+  // multiple batches with different expiry dates).
+  let batchesQuery = supabase
+    .from('inventory_batches')
+    .select('branch_item_id, expiry_date, remaining_quantity, branch_id, medicines!inner(name, category)')
+    .gt('remaining_quantity', 0)
+    .not('expiry_date', 'is', null)
+    .range(0, 49999);
+  batchesQuery = applyBranchFilter(batchesQuery);
+  const { data: batchesData } = await withSignal(batchesQuery, signal);
+  const batchRows: any[] = batchesData || [];
+
+  // Build maps keyed by branch_item_id to dedupe (count one entry per item,
+  // using its earliest at-risk batch).
+  const expiringMap = new Map<string, any>();
+  const expiredMap = new Map<string, any>();
+  batchRows.forEach((b) => {
+    const ed = b.expiry_date;
+    const target = ed <= todayStr ? expiredMap : (ed <= thirtyStr ? expiringMap : null);
+    if (!target) return;
+    const existing = target.get(b.branch_item_id);
+    if (!existing || ed < existing.expiry_date) {
+      target.set(b.branch_item_id, {
+        id: b.branch_item_id,
+        name: b.medicines?.name || 'Unknown',
+        category: b.medicines?.category || '',
+        expiry_date: ed,
+      });
+    }
+  });
+
+  // Also include legacy branch_items rows that have an expiry but no batch
+  // entry (older data created before batches existed).
+  biRows.forEach((bi) => {
+    if (!bi.expiry_date || bi.quantity <= 0) return;
+    if (expiringMap.has(bi.id) || expiredMap.has(bi.id)) return;
+    const entry = {
+      id: bi.id,
+      name: bi.medicines?.name || 'Unknown',
+      category: bi.medicines?.category || '',
+      expiry_date: bi.expiry_date,
+    };
+    if (bi.expiry_date <= todayStr) expiredMap.set(bi.id, entry);
+    else if (bi.expiry_date <= thirtyStr) expiringMap.set(bi.id, entry);
+  });
+
+  const expiringDetails = Array.from(expiringMap.values());
+  const expiredDetails = Array.from(expiredMap.values());
+
+  // Fetch sales data with medicine details for charts (include strip sales)
+  const { data: salesWithItems } = await withSignal((function(){
+    let salesWithItemsQuery = supabase
+      .from('sales')
+      .select(`
+        *,
+        sale_items (
+          quantity,
+          medicine_id,
+          sale_type,
+          stripes_sold,
+          total_price,
+          medicines (name, category, medicine_code_id)
+        )
+      `)
+      .gte('sale_date', startDay)
+      .lte('sale_date', endDay);
+    
+    if (profile?.role === 'staff') {
+      salesWithItemsQuery = salesWithItemsQuery.eq('branch_id', userBranch || profile?.branch_id);
+    } else if (effectiveBranchId) {
+      salesWithItemsQuery = salesWithItemsQuery.eq('branch_id', effectiveBranchId);
+    } else if (ownerBranchIds.length > 0) {
+      salesWithItemsQuery = salesWithItemsQuery.in('branch_id', ownerBranchIds);
+    }
+    return salesWithItemsQuery;
+  })(), signal);
+
+  // Process category sales data — include both pack and strip sales
+  const categoryMap = new Map<string, { sales: number; revenue: number }>();
+  salesWithItems?.forEach(sale => {
+    sale.sale_items?.forEach((item: any) => {
+      if (item.medicines) {
+        const category = item.medicines.category;
+        const existing = categoryMap.get(category) || { sales: 0, revenue: 0 };
+        // For strip sales, stripes_sold is stored as thousandths in DB
+        const soldQty = item.sale_type === 'by_stripe'
+          ? (item.stripes_sold ? item.stripes_sold / 1000 : item.quantity)
+          : (item.quantity || 0);
+        const itemRevenue = Number(item.total_price || 0);
+        categoryMap.set(category, {
+          sales: existing.sales + soldQty,
+          revenue: existing.revenue + itemRevenue
+        });
+      }
+    });
+  });
+
+  const categorySalesArray = Array.from(categoryMap.entries()).map(([category, data]) => ({
+    category,
+    ...data
+  }));
+
+  // Process product performance data — include both pack and strip sales
+  const productMap = new Map<string, { sales: number; revenue: number }>();
+  salesWithItems?.forEach(sale => {
+    sale.sale_items?.forEach((item: any) => {
+      if (item.medicines) {
+        const name = item.medicines.name;
+        const existing = productMap.get(name) || { sales: 0, revenue: 0 };
+        const soldQty = item.sale_type === 'by_stripe'
+          ? (item.stripes_sold ? item.stripes_sold / 1000 : item.quantity)
+          : (item.quantity || 0);
+        const itemRevenue = Number(item.total_price || 0);
+        productMap.set(name, {
+          sales: existing.sales + soldQty,
+          revenue: existing.revenue + itemRevenue
+        });
+      }
+    });
+  });
+
+  const productPerformanceArray = Array.from(productMap.entries())
+    .map(([name, data]) => ({ name, ...data }))
+    .sort((a, b) => b.sales - a.sales)
+    .slice(0, 10);
+
+  // Fetch custom expenses for income vs expense chart
+  const { data: expensesData } = await withSignal((function(){
+    let expensesQuery = supabase
+      .from('expenses')
+      .select('amount, created_at')
+      .gte('created_at', start.toISOString())
+      .lte('created_at', end.toISOString());
+    
+    if (profile?.role === 'staff') {
+      expensesQuery = expensesQuery.eq('branch_id', userBranch || profile?.branch_id);
+    } else if (effectiveBranchId) {
+      expensesQuery = expensesQuery.eq('branch_id', effectiveBranchId);
+    } else if (ownerBranchIds.length > 0) {
+      expensesQuery = expensesQuery.in('branch_id', ownerBranchIds);
+    }
+    return expensesQuery;
+  })(), signal);
+
+  // Income vs Expenses chart uses ONLY operating expenses. Inventory
+  // batch purchases are Cost of Goods (COGS), not operating expenses, and
+  // are reported separately on the Finance page.
+
+  // Process income vs expense data by day
+  const dateMap = new Map<string, { income: number; expenses: number }>();
+  salesWithItems?.forEach(sale => {
+    // Group by business sale_date when present; fall back to created_at.
+    const date = format(new Date((sale as any).sale_date || sale.created_at), 'yyyy-MM-dd');
+    const existing = dateMap.get(date) || { income: 0, expenses: 0 };
+    dateMap.set(date, {
+      ...existing,
+      income: existing.income + Number(sale.total_amount) + Number((sale as any).extra_profit || 0)
+    });
+  });
+
+  // Add custom (operating) expenses only
+  expensesData?.forEach(expense => {
+    const date = format(new Date(expense.created_at), 'yyyy-MM-dd');
+    const existing = dateMap.get(date) || { income: 0, expenses: 0 };
+    dateMap.set(date, {
+      ...existing,
+      expenses: existing.expenses + Number(expense.amount)
+    });
+  });
+
+
+
+  const incomeExpenseArray = Array.from(dateMap.entries())
+    .map(([date, data]) => ({ date, ...data }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // Process payment method data — total_amount is stored net of discount,
+  // so don't subtract discount again. Include extra_profit (tips).
+  const paymentMap = new Map<string, number>();
+  salesData?.forEach(sale => {
+    const method = sale.payment_method || 'Cash';
+    const amount = Number(sale.total_amount) + Number((sale as any).extra_profit || 0);
+    paymentMap.set(method, (paymentMap.get(method) || 0) + amount);
+  });
+
+  const paymentMethodArray = Array.from(paymentMap.entries()).map(([method, amount]) => ({
+    method: method,
+    amount: amount
+  }));
+
+  // Fetch medicine codes (groups) for owner scope
+  // medicine_codes belongs to profiles through owner_id; using the wrong
+  // owner column makes Supabase return no rows, so group cards/charts stay 0.
+  let codesQuery = supabase.from('medicine_codes').select('id, code, label');
+  if (profile?.role === 'owner' && profile?.id) {
+    codesQuery = codesQuery.eq('owner_id', profile.id);
+  }
+  const { data: codesData } = await withSignal(codesQuery, signal);
+  const codeMap = new Map<string, { code: string; label: string }>();
+  (codesData || []).forEach((c: any) => codeMap.set(c.id, { code: c.code, label: c.label }));
+
+  // Count distinct sales transactions per group within date range
+  const groupSalesIds = new Map<string, Set<string>>();
+  salesWithItems?.forEach((sale: any) => {
+    const codeIdsInSale = new Set<string>();
+    (sale.sale_items || []).forEach((si: any) => {
+      const cid = si.medicines?.medicine_code_id;
+      if (cid && codeMap.has(cid)) codeIdsInSale.add(cid);
+    });
+    codeIdsInSale.forEach((cid) => {
+      if (!groupSalesIds.has(cid)) groupSalesIds.set(cid, new Set());
+      groupSalesIds.get(cid)!.add(sale.id);
+    });
+  });
+  const topGroupSalesArr: GroupSalesData[] = Array.from(groupSalesIds.entries())
+    .map(([cid, ids]) => ({
+      name: codeMap.get(cid)?.label || codeMap.get(cid)?.code || 'Unknown',
+      code: codeMap.get(cid)?.code || '',
+      sales: ids.size,
+    }))
+    .sort((a, b) => b.sales - a.sales)
+    .slice(0, 7);
+
+  return {
+    stats: {
+      totalRevenue,
+      totalProducts,
+      todaySales,
+      lowStockItems,
+      outOfStockItems,
+      expiredItems: expiredDetails?.length || 0
+    },
+    outOfStockItems: outOfStockDetails || [],
+    lowStockItems: lowStockDetails || [],
+    expiringItems: expiringDetails || [],
+    expiredItems: expiredDetails || [],
+    categorySales: categorySalesArray,
+    productPerformance: productPerformanceArray,
+    incomeExpenseData: incomeExpenseArray,
+    paymentMethodData: paymentMethodArray,
+    totalGroups: (codesData || []).length,
+    topGroupSales: topGroupSalesArr,
+  };
+}
+
 export default function Dashboard() {
   const { profile } = useAuth();
   const { selectedBranch, userBranch, branchType } = useBranchContext();
@@ -121,382 +527,20 @@ export default function Dashboard() {
     fetchDashboardData();
   }, [reportPeriod, customDate, selectedBranch, userBranch, profile]);
 
-  const getDateRange = () => {
-    const now = new Date();
-    if (customDate) {
-      return { 
-        start: startOfDay(customDate), 
-        end: endOfDay(customDate) 
-      };
-    }
-    
-    switch (reportPeriod) {
-      case 'daily': return { start: startOfDay(now), end: endOfDay(now) };
-      case 'weekly': return { start: subWeeks(now, 1), end: now };
-      case 'monthly': return { start: subMonths(now, 1), end: now };
-      case 'yearly': return { start: subYears(now, 1), end: now };
-      default: return { start: subMonths(now, 1), end: now };
-    }
-  };
-
   const fetchDashboardData = async () => {
     try {
-      const { start, end } = getDateRange();
-      
-      // Determine which branch to filter by (staff fixed to their branch)
-      const effectiveBranchId = profile?.role === 'staff' ? userBranch : selectedBranch;
-
-      // Owner isolation: fetch owner's branch IDs when "All Branches"
-      let ownerBranchIds: string[] = [];
-      if (!effectiveBranchId && profile?.role === 'owner' && profile?.id) {
-        const { data: ownerBranches } = await supabase
-          .from('pharmacy_branches')
-          .select('id')
-          .eq('pharmacy_owner_id', profile.id);
-        ownerBranchIds = (ownerBranches || []).map((b: any) => b.id);
-      }
-
-      // If owner has no branches yet, show empty data
-      if (!effectiveBranchId && ownerBranchIds.length === 0 && profile?.role === 'owner') {
-        setStats({ totalRevenue: 0, totalProducts: 0, todaySales: 0, lowStockItems: 0, outOfStockItems: 0, expiredItems: 0 });
-        setOutOfStockItems([]); setLowStockItems([]); setExpiringItems([]); setExpiredItems([]);
-        setCategorySales([]); setProductPerformance([]); setIncomeExpenseData([]); setPaymentMethodData([]);
-        setTotalGroups(0); setTopGroupSales([]);
-        setLoading(false);
-        return;
-      }
-      
-      // Fetch revenue for the selected period — filter by business sale_date
-      // in Africa/Addis_Ababa time so "today"/"this week" match the Ethiopian
-      // calendar day regardless of the browser's timezone.
-      const startDay = customDate
-        ? addisDayString(customDate)
-        : addisPeriodStartDay(reportPeriod as any);
-      const endDay = customDate ? addisDayString(customDate) : addisDayString();
-      let salesQuery = supabase
-        .from('sales')
-        .select('total_amount, extra_profit, created_at, sale_date, payment_method, discount_amount')
-        .gte('sale_date', startDay)
-        .lte('sale_date', endDay);
-      
-      if (profile?.role === 'staff') {
-        salesQuery = salesQuery.eq('branch_id', userBranch || profile?.branch_id);
-      } else if (effectiveBranchId) {
-        salesQuery = salesQuery.eq('branch_id', effectiveBranchId);
-      } else if (ownerBranchIds.length > 0) {
-        salesQuery = salesQuery.in('branch_id', ownerBranchIds);
-      }
-      const { data: salesData } = await salesQuery;
-      
-      const totalRevenue =
-        salesData?.reduce(
-          (sum, sale: any) => sum + Number(sale.total_amount) + Number(sale.extra_profit || 0),
-          0,
-        ) || 0;
-
-      // CRITICAL: Inventory metrics MUST come from `branch_items` (per-branch stock),
-      // never from `medicines` (the global master catalog). `medicines` rows can
-      // outlive their `branch_items` (e.g. after a branch removal) and have no
-      // meaningful `branch_id` column, so any filter applied to it is silently
-      // ignored — that was the source of the "26 products" leak.
-      const applyBranchFilter = (q: any) => {
-        if (profile?.role === 'staff') return q.eq('branch_id', userBranch || profile?.branch_id);
-        if (effectiveBranchId) return q.eq('branch_id', effectiveBranchId);
-        if (ownerBranchIds.length > 0) return q.in('branch_id', ownerBranchIds);
-        return q;
-      };
-
-      // Single branch_items fetch powers totals + low/out-of-stock + expiry cards.
-      const branchItemsQuery = applyBranchFilter(
-        supabase
-          .from('branch_items')
-          .select('id, quantity, expiry_date, medicines!inner(name, category, minimum_stock_level)')
-          .range(0, 49999)
-      );
-      const { data: branchItemsData } = await branchItemsQuery;
-      const biRows: any[] = branchItemsData || [];
-
-      const totalProducts = biRows.length;
-      const lowStockItems = biRows.filter((bi) =>
-        bi.quantity > 0 && bi.quantity <= (bi.medicines?.minimum_stock_level ?? 0)
-      ).length;
-      const outOfStockItems = biRows.filter((bi) => bi.quantity === 0).length;
-
-      // Fetch sales count for the selected period
-      const periodSalesQuery = applyBranchFilter(
-        supabase
-          .from('sales')
-          .select('id')
-          .gte('sale_date', startDay)
-          .lte('sale_date', endDay)
-      );
-      const { data: periodSalesData } = await periodSalesQuery;
-      const todaySales = periodSalesData?.length || 0;
-
-      // Derive inventory alert lists from the same branch_items snapshot.
-      const outOfStockDetails = biRows
-        .filter((bi) => bi.quantity === 0)
-        .map((bi) => ({
-          id: bi.id,
-          name: bi.medicines?.name || 'Unknown',
-          category: bi.medicines?.category || '',
-          stock_quantity: 0,
-        }));
-
-      const lowStockDetails = biRows
-        .filter((bi) => bi.quantity > 0 && bi.quantity <= (bi.medicines?.minimum_stock_level ?? 0))
-        .map((bi) => ({
-          id: bi.id,
-          name: bi.medicines?.name || 'Unknown',
-          category: bi.medicines?.category || '',
-          stock_quantity: bi.quantity,
-          minimum_stock_level: bi.medicines?.minimum_stock_level ?? 0,
-        }));
-
-      const todayStr = addisDayString();
-      const thirtyStr = addisDayOffset(30);
-
-      // Pull batch-level expiry data (the real source of truth — items can have
-      // multiple batches with different expiry dates).
-      let batchesQuery = supabase
-        .from('inventory_batches')
-        .select('branch_item_id, expiry_date, remaining_quantity, branch_id, medicines!inner(name, category)')
-        .gt('remaining_quantity', 0)
-        .not('expiry_date', 'is', null)
-        .range(0, 49999);
-      batchesQuery = applyBranchFilter(batchesQuery);
-      const { data: batchesData } = await batchesQuery;
-      const batchRows: any[] = batchesData || [];
-
-      // Build maps keyed by branch_item_id to dedupe (count one entry per item,
-      // using its earliest at-risk batch).
-      const expiringMap = new Map<string, any>();
-      const expiredMap = new Map<string, any>();
-      batchRows.forEach((b) => {
-        const ed = b.expiry_date;
-        const target = ed <= todayStr ? expiredMap : (ed <= thirtyStr ? expiringMap : null);
-        if (!target) return;
-        const existing = target.get(b.branch_item_id);
-        if (!existing || ed < existing.expiry_date) {
-          target.set(b.branch_item_id, {
-            id: b.branch_item_id,
-            name: b.medicines?.name || 'Unknown',
-            category: b.medicines?.category || '',
-            expiry_date: ed,
-          });
-        }
-      });
-
-      // Also include legacy branch_items rows that have an expiry but no batch
-      // entry (older data created before batches existed).
-      biRows.forEach((bi) => {
-        if (!bi.expiry_date || bi.quantity <= 0) return;
-        if (expiringMap.has(bi.id) || expiredMap.has(bi.id)) return;
-        const entry = {
-          id: bi.id,
-          name: bi.medicines?.name || 'Unknown',
-          category: bi.medicines?.category || '',
-          expiry_date: bi.expiry_date,
-        };
-        if (bi.expiry_date <= todayStr) expiredMap.set(bi.id, entry);
-        else if (bi.expiry_date <= thirtyStr) expiringMap.set(bi.id, entry);
-      });
-
-      const expiringDetails = Array.from(expiringMap.values());
-      const expiredDetails = Array.from(expiredMap.values());
-
-      // Fetch sales data with medicine details for charts (include strip sales)
-      const { data: salesWithItems } = await (function(){
-        let salesWithItemsQuery = supabase
-          .from('sales')
-          .select(`
-            *,
-            sale_items (
-              quantity,
-              medicine_id,
-              sale_type,
-              stripes_sold,
-              total_price,
-              medicines (name, category, medicine_code_id)
-            )
-          `)
-          .gte('sale_date', startDay)
-          .lte('sale_date', endDay);
-        
-        if (profile?.role === 'staff') {
-          salesWithItemsQuery = salesWithItemsQuery.eq('branch_id', userBranch || profile?.branch_id);
-        } else if (effectiveBranchId) {
-          salesWithItemsQuery = salesWithItemsQuery.eq('branch_id', effectiveBranchId);
-        } else if (ownerBranchIds.length > 0) {
-          salesWithItemsQuery = salesWithItemsQuery.in('branch_id', ownerBranchIds);
-        }
-        return salesWithItemsQuery;
-      })();
-
-      // Process category sales data — include both pack and strip sales
-      const categoryMap = new Map<string, { sales: number; revenue: number }>();
-      salesWithItems?.forEach(sale => {
-        sale.sale_items?.forEach((item: any) => {
-          if (item.medicines) {
-            const category = item.medicines.category;
-            const existing = categoryMap.get(category) || { sales: 0, revenue: 0 };
-            // For strip sales, stripes_sold is stored as thousandths in DB
-            const soldQty = item.sale_type === 'by_stripe'
-              ? (item.stripes_sold ? item.stripes_sold / 1000 : item.quantity)
-              : (item.quantity || 0);
-            const itemRevenue = Number(item.total_price || 0);
-            categoryMap.set(category, {
-              sales: existing.sales + soldQty,
-              revenue: existing.revenue + itemRevenue
-            });
-          }
-        });
-      });
-
-      const categorySalesArray = Array.from(categoryMap.entries()).map(([category, data]) => ({
-        category,
-        ...data
-      }));
-
-      // Process product performance data — include both pack and strip sales
-      const productMap = new Map<string, { sales: number; revenue: number }>();
-      salesWithItems?.forEach(sale => {
-        sale.sale_items?.forEach((item: any) => {
-          if (item.medicines) {
-            const name = item.medicines.name;
-            const existing = productMap.get(name) || { sales: 0, revenue: 0 };
-            const soldQty = item.sale_type === 'by_stripe'
-              ? (item.stripes_sold ? item.stripes_sold / 1000 : item.quantity)
-              : (item.quantity || 0);
-            const itemRevenue = Number(item.total_price || 0);
-            productMap.set(name, {
-              sales: existing.sales + soldQty,
-              revenue: existing.revenue + itemRevenue
-            });
-          }
-        });
-      });
-
-      const productPerformanceArray = Array.from(productMap.entries())
-        .map(([name, data]) => ({ name, ...data }))
-        .sort((a, b) => b.sales - a.sales)
-        .slice(0, 10);
-
-      // Fetch custom expenses for income vs expense chart
-      const { data: expensesData } = await (function(){
-        let expensesQuery = supabase
-          .from('expenses')
-          .select('amount, created_at')
-          .gte('created_at', start.toISOString())
-          .lte('created_at', end.toISOString());
-        
-        if (profile?.role === 'staff') {
-          expensesQuery = expensesQuery.eq('branch_id', userBranch || profile?.branch_id);
-        } else if (effectiveBranchId) {
-          expensesQuery = expensesQuery.eq('branch_id', effectiveBranchId);
-        } else if (ownerBranchIds.length > 0) {
-          expensesQuery = expensesQuery.in('branch_id', ownerBranchIds);
-        }
-        return expensesQuery;
-      })();
-
-      // Income vs Expenses chart uses ONLY operating expenses. Inventory
-      // batch purchases are Cost of Goods (COGS), not operating expenses, and
-      // are reported separately on the Finance page.
-
-      // Process income vs expense data by day
-      const dateMap = new Map<string, { income: number; expenses: number }>();
-      salesWithItems?.forEach(sale => {
-        // Group by business sale_date when present; fall back to created_at.
-        const date = format(new Date((sale as any).sale_date || sale.created_at), 'yyyy-MM-dd');
-        const existing = dateMap.get(date) || { income: 0, expenses: 0 };
-        dateMap.set(date, {
-          ...existing,
-          income: existing.income + Number(sale.total_amount) + Number((sale as any).extra_profit || 0)
-        });
-      });
-
-      // Add custom (operating) expenses only
-      expensesData?.forEach(expense => {
-        const date = format(new Date(expense.created_at), 'yyyy-MM-dd');
-        const existing = dateMap.get(date) || { income: 0, expenses: 0 };
-        dateMap.set(date, {
-          ...existing,
-          expenses: existing.expenses + Number(expense.amount)
-        });
-      });
-
-
-
-      const incomeExpenseArray = Array.from(dateMap.entries())
-        .map(([date, data]) => ({ date, ...data }))
-        .sort((a, b) => a.date.localeCompare(b.date));
-
-      // Process payment method data — total_amount is stored net of discount,
-      // so don't subtract discount again. Include extra_profit (tips).
-      const paymentMap = new Map<string, number>();
-      salesData?.forEach(sale => {
-        const method = sale.payment_method || 'Cash';
-        const amount = Number(sale.total_amount) + Number((sale as any).extra_profit || 0);
-        paymentMap.set(method, (paymentMap.get(method) || 0) + amount);
-      });
-
-      const paymentMethodArray = Array.from(paymentMap.entries()).map(([method, amount]) => ({
-        method: method,
-        amount: amount
-      }));
-
-      // Fetch medicine codes (groups) for owner scope
-      // medicine_codes belongs to profiles through owner_id; using the wrong
-      // owner column makes Supabase return no rows, so group cards/charts stay 0.
-      let codesQuery = supabase.from('medicine_codes').select('id, code, label');
-      if (profile?.role === 'owner' && profile?.id) {
-        codesQuery = codesQuery.eq('owner_id', profile.id);
-      }
-      const { data: codesData } = await codesQuery;
-      const codeMap = new Map<string, { code: string; label: string }>();
-      (codesData || []).forEach((c: any) => codeMap.set(c.id, { code: c.code, label: c.label }));
-
-      // Count distinct sales transactions per group within date range
-      const groupSalesIds = new Map<string, Set<string>>();
-      salesWithItems?.forEach((sale: any) => {
-        const codeIdsInSale = new Set<string>();
-        (sale.sale_items || []).forEach((si: any) => {
-          const cid = si.medicines?.medicine_code_id;
-          if (cid && codeMap.has(cid)) codeIdsInSale.add(cid);
-        });
-        codeIdsInSale.forEach((cid) => {
-          if (!groupSalesIds.has(cid)) groupSalesIds.set(cid, new Set());
-          groupSalesIds.get(cid)!.add(sale.id);
-        });
-      });
-      const topGroupSalesArr: GroupSalesData[] = Array.from(groupSalesIds.entries())
-        .map(([cid, ids]) => ({
-          name: codeMap.get(cid)?.label || codeMap.get(cid)?.code || 'Unknown',
-          code: codeMap.get(cid)?.code || '',
-          sales: ids.size,
-        }))
-        .sort((a, b) => b.sales - a.sales)
-        .slice(0, 7);
-
-      setStats({
-        totalRevenue,
-        totalProducts,
-        todaySales,
-        lowStockItems,
-        outOfStockItems,
-        expiredItems: expiredDetails?.length || 0
-      });
-      setOutOfStockItems(outOfStockDetails || []);
-      setLowStockItems(lowStockDetails || []);
-      setExpiringItems(expiringDetails || []);
-      setExpiredItems(expiredDetails || []);
-      setCategorySales(categorySalesArray);
-      setProductPerformance(productPerformanceArray);
-      setIncomeExpenseData(incomeExpenseArray);
-      setPaymentMethodData(paymentMethodArray);
-      setTotalGroups((codesData || []).length);
-      setTopGroupSales(topGroupSalesArr);
+      const result = await loadDashboardData({ profile, selectedBranch, userBranch, reportPeriod, customDate });
+      setStats(result.stats);
+      setOutOfStockItems(result.outOfStockItems);
+      setLowStockItems(result.lowStockItems);
+      setExpiringItems(result.expiringItems);
+      setExpiredItems(result.expiredItems);
+      setCategorySales(result.categorySales);
+      setProductPerformance(result.productPerformance);
+      setIncomeExpenseData(result.incomeExpenseData);
+      setPaymentMethodData(result.paymentMethodData);
+      setTotalGroups(result.totalGroups);
+      setTopGroupSales(result.topGroupSales);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     } finally {

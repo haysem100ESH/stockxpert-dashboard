@@ -9,7 +9,30 @@ import { AlertTriangle, Lock, Upload, CheckCircle, Loader2 } from 'lucide-react'
 import { cacheMeta, readMeta } from '@/lib/offline/db';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { useToast } from '@/hooks/use-toast';
-import { loadOfflineSubscription, OPEN_ONCE_ONLINE } from '@/lib/offline/gates';
+import { loadOfflineSubscription, OPEN_ONCE_ONLINE, type CachedSubscription } from '@/lib/offline/gates';
+import { withSignal } from '@/lib/offline/readCache';
+
+/**
+ * Shared by the guard and offline preparation. `verified: false` means the account has no
+ * resolvable owner (shown as expired, nothing cached). Throws on read failures.
+ */
+export async function fetchAndCacheSubscription(userId: string, profile: { role: string; branch_id?: string | null }, signal?: AbortSignal)
+  : Promise<{ verified: boolean; status: CachedSubscription['status']; credit: number }> {
+  let ownerId = userId;
+  if (profile.role === 'staff') {
+    if (!profile.branch_id) return { verified: false, status: 'expired', credit: 0 };
+    const { data, error } = await withSignal(supabase.from('pharmacy_branches').select('pharmacy_owner_id').eq('id', profile.branch_id).single(), signal);
+    if (error) throw error;
+    if (!data?.pharmacy_owner_id) return { verified: false, status: 'expired', credit: 0 };
+    ownerId = data.pharmacy_owner_id;
+  }
+  const { data, error } = await withSignal(supabase.from('pharmacy_subscriptions').select('subscription_credit, status').eq('pharmacy_owner_id', ownerId).maybeSingle(), signal);
+  if (error) throw error;
+  const status = data?.status ?? 'expired';
+  const credit = Number(data?.subscription_credit ?? 0);
+  await cacheMeta(`subscription:${userId}`, { status, credit });
+  return { verified: true, status, credit };
+}
 
 interface SubscriptionGuardProps {
   children: React.ReactNode;
@@ -47,20 +70,9 @@ export default function SubscriptionGuard({ children, fallback }: SubscriptionGu
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
       try {
-        let ownerId = id;
-        if (profile.role === 'staff') {
-          if (!profile.branch_id) { setSubscriptionStatus('expired'); return; }
-          const { data, error } = await supabase.from('pharmacy_branches').select('pharmacy_owner_id').eq('id', profile.branch_id).single().abortSignal(controller.signal);
-          if (error) throw error;
-          if (!data?.pharmacy_owner_id) { setSubscriptionStatus('expired'); return; }
-          ownerId = data.pharmacy_owner_id;
-        }
-        const { data, error } = await supabase.from('pharmacy_subscriptions').select('subscription_credit, status').eq('pharmacy_owner_id', ownerId).maybeSingle().abortSignal(controller.signal);
-        if (error) throw error;
-        const status = data?.status ?? 'expired';
-        const credit = Number(data?.subscription_credit ?? 0);
-        if (!disposed) { setSubscriptionStatus(status); setDaysRemaining(credit); }
-        await cacheMeta(`subscription:${id}`, { status, credit });
+        const result = await fetchAndCacheSubscription(id, profile, controller.signal);
+        if (!result.verified) { setSubscriptionStatus('expired'); return; }
+        if (!disposed) { setSubscriptionStatus(result.status); setDaysRemaining(result.credit); }
       } catch { await fallback(); }
       finally { clearTimeout(timer); }
     };

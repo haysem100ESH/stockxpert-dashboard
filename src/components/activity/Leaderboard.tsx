@@ -12,6 +12,7 @@ import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useActivitySnapshot } from '@/hooks/useActivitySnapshot';
 import { usePendingActivities } from '@/hooks/usePendingActivities';
+import { withSignal } from '@/lib/offline/readCache';
 
 interface StaffRow { id: string; full_name: string | null; branch_id: string | null }
 interface BranchRow { id: string }
@@ -24,7 +25,8 @@ function nextDayStart(d = new Date()) { const x = startOfDay(d); x.setDate(x.get
 function startOfWeek(d = new Date()) { const x = startOfDay(d); const day = x.getDay(); const diff = (day === 0 ? -6 : 1 - day); x.setDate(x.getDate()+diff); return x; }
 function startOfMonth(d = new Date()) { const x = startOfDay(d); x.setDate(1); return x; }
 
-function rangeForFilter(filter: FilterKey, customDate?: Date): { from?: Date; to?: Date } {
+export type LeaderboardFilter = FilterKey;
+export function rangeForFilter(filter: FilterKey, customDate?: Date): { from?: Date; to?: Date } {
   if (filter === 'today') return { from: startOfDay(), to: nextDayStart() };
   if (filter === 'week') return { from: startOfWeek(), to: nextDayStart() };
   if (filter === 'month') return { from: startOfMonth(), to: nextDayStart() };
@@ -32,7 +34,7 @@ function rangeForFilter(filter: FilterKey, customDate?: Date): { from?: Date; to
   return {};
 }
 
-async function countActivitiesByStaff(staffIds: string[], range: { from?: Date; to?: Date }) {
+async function countActivitiesByStaff(staffIds: string[], range: { from?: Date; to?: Date }, signal?: AbortSignal) {
   const counts: Record<string, number> = {};
   const chunkSize = 8;
 
@@ -47,7 +49,7 @@ async function countActivitiesByStaff(staffIds: string[], range: { from?: Date; 
       if (range.from) q = q.gte('created_at', range.from.toISOString());
       if (range.to) q = q.lt('created_at', range.to.toISOString());
 
-      const { count, error } = await q;
+      const { count, error } = await withSignal(q, signal);
       if (error) {
         console.warn('[Leaderboard] activity count query error', error);
         throw error;
@@ -61,6 +63,39 @@ async function countActivitiesByStaff(staffIds: string[], range: { from?: Date; 
   return counts;
 }
 
+/** Snapshot scope; shared with offline preparation so saved boards are found by the page. */
+export function leaderboardScope(selectedBranch: string | null, filter: FilterKey, customDate?: Date) {
+  const range = rangeForFilter(filter, customDate);
+  return `leaderboard:${JSON.stringify([selectedBranch, filter, range.from?.toISOString(), range.to?.toISOString()])}`;
+}
+/** Shared with offline preparation (pass a bound `signal`). Owners only. */
+export async function loadLeaderboard(ownerId: string, selectedBranch: string | null, filter: FilterKey, customDate?: Date, signal?: AbortSignal) {
+  const { data: branches, error: branchError } = await withSignal(db
+    .from('pharmacy_branches')
+    .select('id')
+    .eq('pharmacy_owner_id', ownerId), signal);
+  const branchIds = ((branches || []) as BranchRow[]).map((b) => b.id);
+  const branchFilter = selectedBranch ? [selectedBranch] : branchIds;
+  const { data: people, error: peopleError } = await withSignal(db
+    .from('profiles')
+    .select('id, full_name, branch_id')
+    .eq('role', 'staff')
+    .in('branch_id', branchFilter.length ? branchFilter : ['00000000-0000-0000-0000-000000000000']), signal);
+  const staffList = (people || []) as StaffRow[];
+  if (branchError || peopleError) throw branchError ?? peopleError;
+
+  const staffIds = staffList.map((s) => s.id);
+  if (staffIds.length === 0) {
+    return { staff: staffList, activityCounts: {} as Record<string, number> };
+  }
+
+  // Use exact server-side counts for the same date range used by the drawer.
+  // Fetching raw rows can silently stop at PostgREST's row limit, which made
+  // recent activity appear as 0 while the staff detail drawer still had rows.
+  const counts = await countActivitiesByStaff(staffIds, rangeForFilter(filter, customDate), signal);
+  return { staff: staffList, activityCounts: counts };
+}
+
 export default function Leaderboard({ onSelectStaff, onRangeChange }: { onSelectStaff?: (s: StaffRow, range: LeaderboardRange) => void; onRangeChange?: (range: LeaderboardRange) => void }) {
   const { profile } = useAuth();
   const { selectedBranch } = useBranchContext();
@@ -70,35 +105,11 @@ export default function Leaderboard({ onSelectStaff, onRangeChange }: { onSelect
 
   const load = useCallback(async () => {
     if (!profile || profile.role !== 'owner') return { staff: [], activityCounts: {} };
-    const { data: branches, error: branchError } = await db
-      .from('pharmacy_branches')
-      .select('id')
-      .eq('pharmacy_owner_id', profile.id);
-    const branchIds = ((branches || []) as BranchRow[]).map((b) => b.id);
-    const branchFilter = selectedBranch ? [selectedBranch] : branchIds;
-    const { data: people, error: peopleError } = await db
-      .from('profiles')
-      .select('id, full_name, branch_id')
-      .eq('role', 'staff')
-      .in('branch_id', branchFilter.length ? branchFilter : ['00000000-0000-0000-0000-000000000000']);
-    const staffList = (people || []) as StaffRow[];
-    if (branchError || peopleError) throw branchError ?? peopleError;
-
-    const staffIds = staffList.map((s) => s.id);
-    if (staffIds.length === 0) {
-      return { staff: staffList, activityCounts: {} };
-    }
-
-    // Use exact server-side counts for the same date range used by the drawer.
-    // Fetching raw rows can silently stop at PostgREST's row limit, which made
-    // recent activity appear as 0 while the staff detail drawer still had rows.
-    const counts = await countActivitiesByStaff(staffIds, rangeForFilter(filter, customDate));
-    return { staff: staffList, activityCounts: counts };
+    return loadLeaderboard(profile.id, selectedBranch, filter, customDate);
   }, [profile, selectedBranch, filter, customDate]);
 
 
-  const range = rangeForFilter(filter, customDate);
-  const scope = `leaderboard:${JSON.stringify([selectedBranch, filter, range.from?.toISOString(), range.to?.toISOString()])}`;
+  const scope = leaderboardScope(selectedBranch, filter, customDate);
   const snapshot = useActivitySnapshot<{ staff: StaffRow[]; activityCounts: Record<string, number> }>(profile?.id, scope, { staff: [], activityCounts: {} }, load);
   const { staff, activityCounts } = snapshot.data;
   const { loading, setData } = snapshot;

@@ -21,14 +21,15 @@ import { useAuth } from './useAuth';
 
 export const OWNER_BRANCH_IDS_KEY = (ownerId?: string) => ['owner-branch-ids', ownerId];
 
-async function fetchOwnerBranchIds(ownerId: string): Promise<string[]> {
+/** Shared by the hook and offline preparation (pass `signal` to bind a preparation request). */
+export async function fetchOwnerBranchIds(ownerId: string, signal?: AbortSignal): Promise<string[]> {
   if (!navigator.onLine) return await readMeta<string[]>(`branches:${ownerId}`) ?? [];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   const { data, error } = await supabase
     .from('pharmacy_branches')
     .select('id')
-    .eq('pharmacy_owner_id', ownerId).abortSignal(controller.signal);
+    .eq('pharmacy_owner_id', ownerId).abortSignal(signal ?? controller.signal);
   clearTimeout(timer);
   if (error) return await readMeta<string[]>(`branches:${ownerId}`) ?? [];
   const ids = (data || []).map((b: any) => b.id);

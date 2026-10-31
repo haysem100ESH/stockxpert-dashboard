@@ -33,6 +33,7 @@ import { useBranchContext } from '@/hooks/useBranchContext';
 import { useOwnerBranchIds } from '@/hooks/useOwnerBranchIds';
 import { getSeasonalMultiplier } from '@/hooks/useSeasonalPerformance';
 import { getGlobalLowStockThreshold, useLowStockThreshold } from '@/hooks/useLowStockThreshold';
+import { withSignal } from '@/lib/offline/readCache';
 
 export interface SmartItem {
   id: string;
@@ -246,13 +247,16 @@ function toSmartItem(r: RpcRow, now: number, hasSalesAggregation = true): SmartI
   };
 }
 
-async function fetchBranchItemsFallback(branchIds: string[]): Promise<SmartItem[]> {
-  const { data, error } = await supabase
+/**
+ * The widget's offline path (the RPC is never cached): shared with offline preparation.
+ */
+export async function fetchBranchItemsFallback(branchIds: string[], signal?: AbortSignal): Promise<SmartItem[]> {
+  const { data, error } = await withSignal(supabase
     .from('branch_items')
     .select('id, medicine_id, branch_id, quantity, expiry_date, selling_price, medicines!inner(name, category, minimum_stock_level, item_type, lead_time_days)')
     .in('branch_id', branchIds)
     .order('id', { ascending: false })
-    .limit(10_000);
+    .limit(10_000), signal);
 
   if (error) throw error;
 

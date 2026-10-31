@@ -9,8 +9,9 @@ import { getOfflineState } from './store';
  * cached copy is served. Writes, RPCs, auth and edge functions are never cached.
  */
 export const READ_CACHE_SCHEMA = 1;
-export const MAX_ENTRY_BYTES = 2 * 1024 * 1024;
-export const MAX_USER_BYTES = 25 * 1024 * 1024;
+/** Large enough for a 20,000-row prepared list (see prepare.ts). */
+export const MAX_ENTRY_BYTES = 8 * 1024 * 1024;
+export const MAX_USER_BYTES = 150 * 1024 * 1024;
 export const DATED_RETENTION_MS = 30 * 86_400_000;
 
 export interface ReadCacheEntry {
@@ -31,6 +32,30 @@ export const getReadContext = () => ({ userId: readUser, scopeKey: readScope });
 const bypass = new WeakSet<AbortSignal>();
 /** Reachability probes must always hit the network. */
 export const bypassReadCache = (signal: AbortSignal) => { bypass.add(signal); };
+
+/**
+ * Background preparation binds its requests (by AbortSignal) to the user/branch being
+ * prepared, without touching the visible page's global read scope. Bound requests are
+ * never served from cache, and their durable writes can be awaited.
+ */
+export interface PrepareBinding {
+  userId: string; scopeKey: string;
+  /** One promise per successful response: true once durably saved, false if refused (too large, user changed). */
+  writes: Promise<boolean>[];
+  /** Latest outcome per request; a retried request that later succeeds clears its failure. */
+  outcomes: Map<string, { ok: boolean; status?: number; rows?: number }>;
+}
+const bindings = new WeakMap<AbortSignal, PrepareBinding>();
+export function bindPrepare(signal: AbortSignal, userId: string, scopeKey: string): PrepareBinding {
+  const binding: PrepareBinding = { userId, scopeKey, writes: [], outcomes: new Map() };
+  bindings.set(signal, binding);
+  return binding;
+}
+/** Attach an AbortSignal to a query builder only when one is supplied (URL is unchanged). */
+export function withSignal<T>(query: T, signal?: AbortSignal): T {
+  return signal ? (query as unknown as { abortSignal: (s: AbortSignal) => T }).abortSignal(signal) : query;
+}
+const rowCount = (text: string) => { try { const v = JSON.parse(text); return Array.isArray(v) ? v.length : 1; } catch { return 0; } };
 
 // ---------- status for banners ----------
 interface ReadStatus { byPath: Record<string, { oldest?: string; misses: number }>; offlineSince?: string; version: number }
@@ -261,6 +286,8 @@ export function createReadCacheFetch(base: FetchLike): FetchLike {
   return async (input, init) => {
     const method = (init?.method ?? 'GET').toUpperCase();
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const binding = init?.signal ? bindings.get(init.signal) : undefined;
+    if (binding) return preparedFetch(base, binding, input, init, url, method);
     const { userId, scopeKey } = getReadContext();
     if ((method !== 'GET' && method !== 'HEAD') || !url.includes('/rest/v1/') || url.includes('/rest/v1/rpc/')
       || (init?.signal && bypass.has(init.signal)) || !userId) return base(input, init);
@@ -291,6 +318,35 @@ export function createReadCacheFetch(base: FetchLike): FetchLike {
     return res;
   };
 }
+/** A preparation request: network only, saved under the bound user/scope, write awaited by the caller. */
+async function preparedFetch(base: FetchLike, binding: PrepareBinding, input: RequestInfo | URL, init: RequestInit | undefined, url: string, method: string) {
+  const signal = init?.signal ?? undefined;
+  const signedInAs = () => getReadContext().userId === binding.userId;
+  const cacheable = (method === 'GET' || method === 'HEAD') && url.includes('/rest/v1/') && !url.includes('/rest/v1/rpc/');
+  let req: ReadRequest | undefined;
+  try { if (cacheable) req = describeRequest(url, method, init?.headers); } catch { req = undefined; }
+  const outcomeKey = req?.queryKey ?? `${method} ${url}`;
+  // Never fetch for a user who is no longer signed in, and never fall back to saved copies.
+  if (!signedInAs() || !getOfflineState().reachable || signal?.aborted) {
+    binding.outcomes.set(outcomeKey, { ok: false });
+    throw new DOMException('Preparation stopped', 'AbortError');
+  }
+  let res: Response;
+  try { res = await base(input, init); }
+  catch (err) { binding.outcomes.set(outcomeKey, { ok: false }); throw err; }
+  if (!res.ok || !req) { binding.outcomes.set(outcomeKey, { ok: res.ok, status: res.status }); return res; }
+  const copy = res.clone();
+  const request = req;
+  binding.writes.push((async () => {
+    const text = method === 'HEAD' ? '' : await copy.text();
+    binding.outcomes.set(outcomeKey, { ok: true, status: res.status, rows: method === 'HEAD' ? 0 : rowCount(text) });
+    // A response finishing after sign-out (or a user switch) is never saved under anyone.
+    if (!signedInAs() || signal?.aborted) return false;
+    return saveReadEntry(binding.userId, binding.scopeKey, request, res.status, text, res.headers.get('content-range'));
+  })().catch(() => false));
+  return res;
+}
+
 /** Install on the existing client without changing its configuration or auth. */
 export function installReadCache(client: { rest?: { fetch?: FetchLike } }) {
   const rest = client.rest as { fetch?: FetchLike; __offlineReadCache?: boolean } | undefined;

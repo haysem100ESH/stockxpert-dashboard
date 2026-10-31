@@ -4,6 +4,7 @@ import { cacheMeta, readMeta } from '@/lib/offline/db';
 import { useOfflineStatus } from '@/lib/offline/store';
 import { useAuth } from '@/hooks/useAuth';
 import { loadOfflinePermissions } from '@/lib/offline/gates';
+import { withSignal } from '@/lib/offline/readCache';
 
 export type PermissionLevel = 'no_access' | 'read' | 'edit';
 
@@ -72,6 +73,30 @@ const DEFAULT_PERMISSIONS: Record<PageName, PermissionLevel> = Object.fromEntrie
   ALL_PAGES.map(p => [p, 'edit' as PermissionLevel])
 ) as Record<PageName, PermissionLevel>;
 
+/**
+ * Shared by the provider and offline preparation: same request, same merge, same cached value.
+ * Returns null (and caches nothing) when the server read fails.
+ */
+export async function fetchAndCacheStaffPermissions(staffId: string, signal?: AbortSignal): Promise<Record<PageName, PermissionLevel> | null> {
+  const { data, error } = await withSignal(supabase
+    .from('staff_permissions')
+    .select('page_name, permission_level')
+    .eq('staff_id', staffId), signal);
+  if (error) {
+    console.error('Failed to fetch staff permissions:', error);
+    return null;
+  }
+  // Start with defaults (edit for all), then override with DB values
+  const merged = { ...DEFAULT_PERMISSIONS };
+  for (const row of data ?? []) {
+    if (ALL_PAGES.includes(row.page_name as PageName)) {
+      merged[row.page_name as PageName] = row.permission_level as PermissionLevel;
+    }
+  }
+  await cacheMeta(`permissions:${staffId}`, merged);
+  return merged;
+}
+
 export function StaffPermissionsProvider({ children }: { children: ReactNode }) {
   const { profile } = useAuth();
   const { reachable } = useOfflineStatus();
@@ -102,32 +127,18 @@ export function StaffPermissionsProvider({ children }: { children: ReactNode }) 
       if (!reachable) { await fallback(); return; }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
-      const { data, error } = await supabase
-        .from('staff_permissions')
-        .select('page_name, permission_level')
-        .eq('staff_id', profile.id).abortSignal(controller.signal);
+      const merged = await fetchAndCacheStaffPermissions(profile.id, controller.signal);
       clearTimeout(timer);
 
-      if (error) {
-        console.error('Failed to fetch staff permissions:', error);
+      if (!merged) {
         // Cached verified permissions only; uncached offline access is denied.
         await fallback();
         setLoading(false);
         return;
       }
 
-      // Start with defaults (edit for all), then override with DB values
-      const merged = { ...DEFAULT_PERMISSIONS };
-      if (data) {
-        for (const row of data) {
-          if (ALL_PAGES.includes(row.page_name as PageName)) {
-            merged[row.page_name as PageName] = row.permission_level as PermissionLevel;
-          }
-        }
-      }
       setPermissions(merged);
       setUncachedOffline(false);
-      await cacheMeta(`permissions:${profile.id}`, merged);
     } catch (err) {
       console.error('Permission fetch error:', err);
       await fallback();

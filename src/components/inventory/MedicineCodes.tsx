@@ -33,6 +33,24 @@ import {
 } from '@/hooks/useMedicineCodeAnalytics';
 import MedicineCodeBatchesDialog from './MedicineCodeBatchesDialog';
 import MedicineCodeAnalytics from './MedicineCodeAnalytics';
+import { withSignal } from '@/lib/offline/readCache';
+
+/** Shared with offline preparation: packaging for every medicine in the inventory list (chunks of 20). */
+export async function fetchCodePackagings(items: Array<{ medicine_id?: string }>, signal?: AbortSignal): Promise<{ map: Record<string, Packaging>; failed: boolean }> {
+  const ids = [...new Set(items.map((i: any) => i.medicine_id).filter(Boolean))] as string[];
+  if (ids.length === 0) return { map: {}, failed: false };
+  const { chunkedInPartial } = await import('@/lib/supabaseBatch');
+  console.log(`[Supabase batching] medicine_packaging by medicine_id (MedicineCodes): ${Math.ceil(ids.length / 20)} batches for ${ids.length} ids`);
+  const { data, failed } = await chunkedInPartial<any>(ids, (chunk) =>
+    withSignal((supabase as any)
+      .from('medicine_packaging')
+      .select('medicine_id, unit_name, strip_enabled, units_per_strip, strip_name, pack_enabled, strips_per_pack, pack_name, unit_selling_price, strip_selling_price, pack_selling_price')
+      .in('medicine_id', chunk), signal)
+  , 20);
+  const map: Record<string, Packaging> = {};
+  data.forEach((r: any) => { map[r.medicine_id] = r; });
+  return { map, failed };
+}
 
 interface LinkedMedicine {
   id: string;
@@ -74,16 +92,7 @@ export default function MedicineCodes() {
     const ids = [...new Set(items.map((i: any) => i.medicine_id).filter(Boolean))] as string[];
     if (ids.length === 0) return;
     (async () => {
-      const { chunkedInPartial } = await import('@/lib/supabaseBatch');
-      console.log(`[Supabase batching] medicine_packaging by medicine_id (MedicineCodes): ${Math.ceil(ids.length / 20)} batches for ${ids.length} ids`);
-      const { data } = await chunkedInPartial<any>(ids, (chunk) =>
-        (supabase as any)
-          .from('medicine_packaging')
-          .select('medicine_id, unit_name, strip_enabled, units_per_strip, strip_name, pack_enabled, strips_per_pack, pack_name, unit_selling_price, strip_selling_price, pack_selling_price')
-          .in('medicine_id', chunk)
-      , 20);
-      const map: Record<string, Packaging> = {};
-      data.forEach((r: any) => { map[r.medicine_id] = r; });
+      const { map } = await fetchCodePackagings(items);
       setPackagings(map);
     })();
   }, [items]);

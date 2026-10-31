@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { useActivitySnapshot } from './useActivitySnapshot';
+import { withSignal } from '@/lib/offline/readCache';
 
 export interface StaffGoal {
   id: string;
@@ -19,18 +20,38 @@ export interface StaffGoal {
 
 export interface GoalAssignment { id: string; goal_id: string; staff_id: string }
 
-async function resolveOwnerId(profile: any): Promise<string | null> {
+async function resolveOwnerId(profile: any, signal?: AbortSignal): Promise<string | null> {
   if (!profile) return null;
   if (profile.role === 'owner') return profile.id;
   if (profile.role === 'staff' && profile.branch_id) {
-    const { data } = await (supabase as any)
+    const { data } = await withSignal((supabase as any)
       .from('pharmacy_branches')
       .select('pharmacy_owner_id')
       .eq('id', profile.branch_id)
-      .single();
+      .single(), signal);
     return (data as any)?.pharmacy_owner_id ?? null;
   }
   return null;
+}
+
+export const STAFF_GOALS_SCOPE = 'goals';
+/** Shared with offline preparation (pass a bound `signal`). */
+export async function loadStaffGoals(profile: any, signal?: AbortSignal): Promise<{ goals: StaffGoal[]; assignments: GoalAssignment[]; ownerId: string | null }> {
+  const oid = await resolveOwnerId(profile, signal);
+  const { data: g, error: ge } = await withSignal((supabase as any).from('staff_goals').select('*').eq('active', true).order('created_at', { ascending: false }), signal);
+  const { data: a, error: ae } = await withSignal((supabase as any).from('staff_goal_assignments').select('*'), signal);
+  if (ge || ae) throw ge ?? ae;
+  return { goals: (g || []) as StaffGoal[], assignments: (a || []) as GoalAssignment[], ownerId: oid };
+}
+/** Goals applicable to a staff user (owners have none), as the page filters them. */
+export function goalsForStaff(profile: { id: string; role: string; branch_id?: string | null } | null, goals: StaffGoal[], assignments: GoalAssignment[]): StaffGoal[] {
+  if (!profile || profile.role !== 'staff') return [];
+  return goals.filter((g) => {
+    if (g.assignment_scope === 'all') return true;
+    if (g.assignment_scope === 'branch') return g.branch_id === profile.branch_id;
+    if (g.assignment_scope === 'staff') return assignments.some((a) => a.goal_id === g.id && a.staff_id === profile.id);
+    return false;
+  });
 }
 
 export function useStaffGoals() {
@@ -38,14 +59,10 @@ export function useStaffGoals() {
 
   const load = useCallback(async () => {
     if (!profile) return { goals: [], assignments: [], ownerId: null };
-    const oid = await resolveOwnerId(profile);
-    const { data: g, error: ge } = await (supabase as any).from('staff_goals').select('*').eq('active', true).order('created_at', { ascending: false });
-    const { data: a, error: ae } = await (supabase as any).from('staff_goal_assignments').select('*');
-    if (ge || ae) throw ge ?? ae;
-    return { goals: (g || []) as StaffGoal[], assignments: (a || []) as GoalAssignment[], ownerId: oid };
+    return loadStaffGoals(profile);
   }, [profile]);
 
-  const snapshot = useActivitySnapshot<{ goals: StaffGoal[]; assignments: GoalAssignment[]; ownerId: string | null }>(profile?.id, 'goals', { goals: [], assignments: [], ownerId: null }, load);
+  const snapshot = useActivitySnapshot<{ goals: StaffGoal[]; assignments: GoalAssignment[]; ownerId: string | null }>(profile?.id, STAFF_GOALS_SCOPE, { goals: [], assignments: [], ownerId: null }, load);
   const { goals, assignments, ownerId } = snapshot.data;
   const { loading } = snapshot;
 
@@ -96,15 +113,7 @@ export function useStaffGoals() {
   };
 
   /** Goals applicable to the current staff user. */
-  const myGoals = (): StaffGoal[] => {
-    if (!profile || profile.role !== 'staff') return [];
-    return goals.filter((g) => {
-      if (g.assignment_scope === 'all') return true;
-      if (g.assignment_scope === 'branch') return g.branch_id === profile.branch_id;
-      if (g.assignment_scope === 'staff') return assignments.some((a) => a.goal_id === g.id && a.staff_id === profile.id);
-      return false;
-    });
-  };
+  const myGoals = (): StaffGoal[] => goalsForStaff(profile, goals, assignments);
 
   return { goals, assignments, loading, ownerId, create, remove, setActive, refetch: snapshot.refetch, myGoals, banner: snapshot.banner, cacheMissing: snapshot.cacheMissing, offline: snapshot.offline };
 }

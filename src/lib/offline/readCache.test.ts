@@ -141,7 +141,8 @@ describe('shared read cache', () => {
     const left = (await offlineDb.readCache.toArray()).map(r => r.queryKey);
     expect(left.some(k => k.includes('id=eq.1'))).toBe(false);
     expect(await offlineDb.sales.count()).toBe(1);
-    expect(rc.MAX_USER_BYTES).toBe(25 * 1024 * 1024);
+    // Phase 4 Feature A: per-user read budget raised from 25 MB to 150 MB.
+    expect(rc.MAX_USER_BYTES).toBe(150 * 1024 * 1024);
   });
   test('"Remove my data" clears this user\'s read cache only; sign-out keeps it', async () => {
     await get(PAGE_DATASETS.customers); await flush();

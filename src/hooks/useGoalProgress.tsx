@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import type { StaffGoal } from './useStaffGoals';
 import { useActivitySnapshot } from './useActivitySnapshot';
+import { withSignal } from '@/lib/offline/readCache';
 
 function startOfDay(d = new Date()) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function startOfWeek(d = new Date()) { const x = startOfDay(d); const day = x.getDay(); const diff = (day === 0 ? -6 : 1 - day); x.setDate(x.getDate()+diff); return x; }
@@ -33,31 +34,37 @@ export function goalPeriod(goal: StaffGoal): { from: Date; to: Date; key: string
   return { from, to, key: `custom-${goal.id}` };
 }
 
+/** Shared with offline preparation (pass a bound `signal`). */
+export async function loadGoalProgress(userId: string, goalId: string, period: { from: Date; to: Date; key: string }, signal?: AbortSignal) {
+  const { count: realCount, error: countError } = await withSignal((supabase as any)
+    .from('activity_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('created_at', period.from.toISOString())
+    .lt('created_at', period.to.toISOString()), signal);
+
+  const { data: comp, error: completionError } = await withSignal((supabase as any)
+    .from('staff_goal_completions')
+    .select('id')
+    .eq('goal_id', goalId)
+    .eq('staff_id', userId)
+    .eq('period_key', period.key)
+    .maybeSingle(), signal);
+  if (countError || completionError) throw countError ?? completionError;
+  return { count: realCount ?? 0, completedThisPeriod: !!comp };
+}
+export const goalProgressScope = (goalId: string, periodKey: string) => `goalProgress:${goalId}:${periodKey}`;
+
 export function useGoalProgress(goal: StaffGoal, onComplete?: (g: StaffGoal) => void) {
   const { user } = useAuth();
   const period = useMemo(() => goalPeriod(goal), [goal]);
 
   const load = useCallback(async () => {
     if (!user) return { count: 0, completedThisPeriod: false };
-    const { count: realCount, error: countError } = await (supabase as any)
-      .from('activity_log')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .gte('created_at', period.from.toISOString())
-      .lt('created_at', period.to.toISOString());
-
-    const { data: comp, error: completionError } = await (supabase as any)
-      .from('staff_goal_completions')
-      .select('id')
-      .eq('goal_id', goal.id)
-      .eq('staff_id', user.id)
-      .eq('period_key', period.key)
-      .maybeSingle();
-    if (countError || completionError) throw countError ?? completionError;
-    return { count: realCount ?? 0, completedThisPeriod: !!comp };
+    return loadGoalProgress(user.id, goal.id, period);
   }, [user, goal.id, period.from, period.to, period.key]);
 
-  const snapshot = useActivitySnapshot(user?.id, `goalProgress:${goal.id}:${period.key}`, { count: 0, completedThisPeriod: false }, load);
+  const snapshot = useActivitySnapshot(user?.id, goalProgressScope(goal.id, period.key), { count: 0, completedThisPeriod: false }, load);
   const { count, completedThisPeriod } = snapshot.data;
   const { setData } = snapshot;
 

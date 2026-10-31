@@ -5,27 +5,28 @@ import type { Packaging } from '@/lib/packaging';
 import { offlineDb, readMeta } from './db';
 import { batchAvailable } from './rules';
 import { withPosLock } from './network';
+import { withSignal } from './readCache';
 import type { CatalogItem } from './types';
 
 export interface CachedBranch { id: string; name: string; is_main_branch: boolean; branch_type: string }
 export async function allowedBranches(userId: string): Promise<string[]> {
   return await readMeta<string[]>(`branches:${userId}`) ?? [];
 }
-export async function fetchCatalog(branchIds: string[], userId: string): Promise<CatalogItem[]> {
+export async function fetchCatalog(branchIds: string[], userId: string, signal?: AbortSignal): Promise<CatalogItem[]> {
   const allowed = await allowedBranches(userId);
   if (!branchIds.every(id => allowed.includes(id))) throw new Error('Branch is not authorized on this device. Connect to refresh your access.');
-  const items = await chunkedIn<any>(branchIds, ids => supabase.from('branch_items')
+  const items = await chunkedIn<any>(branchIds, ids => withSignal(supabase.from('branch_items')
     .select('id, medicine_id, branch_id, selling_price, purchase_price, quantity, expiry_date')
-    .in('branch_id', ids).order('created_at', { ascending: false }));
+    .in('branch_id', ids).order('created_at', { ascending: false }), signal));
   if (!items.length) return [];
   const medicineIds = [...new Set<string>(items.map(item => item.medicine_id))];
   const [medicines, batches, packaging, branches] = await Promise.all([
-    chunkedIn<any>(medicineIds, ids => supabase.from('medicines').select('id, name, generic_name, category, item_type, unit_label, units_per_pack, medicine_group, strength, packaging_mode, main_unit_name, unit_price').in('id', ids), 20),
+    chunkedIn<any>(medicineIds, ids => withSignal(supabase.from('medicines').select('id, name, generic_name, category, item_type, unit_label, units_per_pack, medicine_group, strength, packaging_mode, main_unit_name, unit_price').in('id', ids), signal), 20),
     // Include depleted rows too: zero live batches is not a legacy fallback.
-    chunkedIn<any>(items.map(item => item.id), ids => supabase.from('inventory_batches')
-      .select('*').in('branch_item_id', ids), 20),
-    chunkedIn<any>(medicineIds, ids => supabase.from('medicine_packaging').select('*').in('medicine_id', ids), 20),
-    chunkedIn<any>(branchIds, ids => supabase.from('pharmacy_branches').select('id, name').in('id', ids)),
+    chunkedIn<any>(items.map(item => item.id), ids => withSignal(supabase.from('inventory_batches')
+      .select('*').in('branch_item_id', ids), signal), 20),
+    chunkedIn<any>(medicineIds, ids => withSignal(supabase.from('medicine_packaging').select('*').in('medicine_id', ids), signal), 20),
+    chunkedIn<any>(branchIds, ids => withSignal(supabase.from('pharmacy_branches').select('id, name').in('id', ids), signal)),
   ]);
   const medMap = new Map(medicines.map(m => [m.id, m]));
   const pkgMap = new Map(packaging.map(p => [p.medicine_id, p as Packaging]));
@@ -58,10 +59,13 @@ export async function replaceCatalog(branchIds: string[], userId: string, rows: 
   }
   await offlineDb.catalog.bulkPut(rows);
 }
-export async function refreshCatalog(branchIds: string[], userId: string): Promise<void> {
-  if (!branchIds.length) return;
-  await withPosLock(async () => {
-    const rows = await fetchCatalog(branchIds, userId);
+export async function refreshCatalog(branchIds: string[], userId: string, signal?: AbortSignal): Promise<number> {
+  if (!branchIds.length) return 0;
+  return withPosLock(async () => {
+    const rows = await fetchCatalog(branchIds, userId, signal);
+    // Preparation cancelled (offline / signed out) after the fetch: keep the previous catalog.
+    if (signal?.aborted) throw new DOMException('Preparation stopped', 'AbortError');
     await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog(branchIds, userId, rows));
+    return rows.length;
   });
 }

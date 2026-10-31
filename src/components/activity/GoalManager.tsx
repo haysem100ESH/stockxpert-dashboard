@@ -12,9 +12,30 @@ import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { useActivitySnapshot } from '@/hooks/useActivitySnapshot';
+import { withSignal } from '@/lib/offline/readCache';
 
 interface StaffOption { id: string; full_name: string | null; branch_id: string | null }
 interface BranchOption { id: string; name: string }
+
+export const GOAL_OPTIONS_SCOPE = 'goalOptions';
+/** Shared with offline preparation (pass a bound `signal`). Owners only. */
+export async function loadGoalOptions(ownerId: string, signal?: AbortSignal): Promise<{ branches: BranchOption[]; staff: StaffOption[] }> {
+  const { data: br, error: branchError } = await withSignal((supabase as any)
+    .from('pharmacy_branches')
+    .select('id, name')
+    .eq('pharmacy_owner_id', ownerId), signal);
+  if (branchError) throw branchError;
+  const branches = (br || []).map((b: any) => ({ id: b.id, name: b.name }));
+  const branchIds = (br || []).map((b: any) => b.id);
+  if (branchIds.length === 0) return { branches, staff: [] };
+  const { data: pe, error: staffError } = await withSignal((supabase as any)
+    .from('profiles')
+    .select('id, full_name, branch_id')
+    .eq('role', 'staff')
+    .in('branch_id', branchIds), signal);
+  if (staffError) throw staffError;
+  return { branches, staff: (pe || []) as StaffOption[] };
+}
 
 export default function GoalManager() {
   const { profile } = useAuth();
@@ -34,23 +55,9 @@ export default function GoalManager() {
 
   const loadOptions = useCallback(async () => {
     if (!profile || profile.role !== 'owner') return { branches: [], staff: [] };
-      const { data: br, error: branchError } = await (supabase as any)
-        .from('pharmacy_branches')
-        .select('id, name')
-        .eq('pharmacy_owner_id', profile.id);
-      if (branchError) throw branchError;
-      const branches = (br || []).map((b: any) => ({ id: b.id, name: b.name }));
-      const branchIds = (br || []).map((b: any) => b.id);
-      if (branchIds.length === 0) return { branches, staff: [] };
-      const { data: pe, error: staffError } = await (supabase as any)
-        .from('profiles')
-        .select('id, full_name, branch_id')
-        .eq('role', 'staff')
-        .in('branch_id', branchIds);
-      if (staffError) throw staffError;
-      return { branches, staff: (pe || []) as StaffOption[] };
+    return loadGoalOptions(profile.id);
   }, [profile]);
-  const options = useActivitySnapshot<{ branches: BranchOption[]; staff: StaffOption[] }>(profile?.id, 'goalOptions', { branches: [], staff: [] }, loadOptions);
+  const options = useActivitySnapshot<{ branches: BranchOption[]; staff: StaffOption[] }>(profile?.id, GOAL_OPTIONS_SCOPE, { branches: [], staff: [] }, loadOptions);
   const { branches, staff } = options.data;
 
   const submit = async () => {

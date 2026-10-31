@@ -30,6 +30,7 @@ import { useOwnerBranchIds } from './useOwnerBranchIds';
 import type { BranchItem } from '@/components/inventory/EditBranchItemDialog';
 import type { Packaging } from '@/lib/packaging';
 import { chunkedIn, chunkedInPartial } from '@/lib/supabaseBatch';
+import { withSignal } from '@/lib/offline/readCache';
 
 export type EnrichedBranchItem = BranchItem & {
   branch_name?: string;
@@ -49,6 +50,7 @@ export const UNAVAILABLE = 'Unavailable';
 // Cache of branch-name lookups, shared across page fetches in one session.
 async function enrichItems(
   rawItems: any[],
+  signal?: AbortSignal,
 ): Promise<EnrichedBranchItem[]> {
   if (rawItems.length === 0) return [];
   const medicineIds = [...new Set(rawItems.map((i) => i.medicine_id))];
@@ -58,16 +60,16 @@ async function enrichItems(
   // so large id lists don't blow past URL/proxy limits on slow connections.
   const [medRes, branchRes, packRes] = await Promise.all([
     chunkedInPartial<any>(medicineIds, (ids) =>
-      supabase
+      withSignal(supabase
         .from('medicines')
         .select('id, name, generic_name, category, manufacturer, batch_number, item_type, unit_label, units_per_pack, strips_per_pack, units_per_strip, medicine_group, strength, packaging_mode, main_unit_name, unit_price, minimum_stock_level, medicine_code_id')
-        .in('id', ids)
+        .in('id', ids), signal)
     , 20),
     chunkedInPartial<any>(allBranchIds, (ids) =>
-      supabase.from('pharmacy_branches').select('id, name').in('id', ids)
+      withSignal(supabase.from('pharmacy_branches').select('id, name').in('id', ids), signal)
     ),
     chunkedInPartial<any>(medicineIds, (ids) =>
-      (supabase as any).from('medicine_packaging').select('*').in('medicine_id', ids)
+      withSignal((supabase as any).from('medicine_packaging').select('*').in('medicine_id', ids), signal)
     , 20),
   ]);
 
@@ -117,24 +119,28 @@ const NEXT_PAGE_SIZE = 200;
  * Progressive fetch: returns the first page quickly, then keeps loading
  * subsequent pages in the background and appending them to the cache via
  * the supplied `appendToCache` callback. Resolves once all pages are loaded.
+ * Shared with offline preparation, which passes a bound `signal` and a `maxRows` cap
+ * (the page itself never caps).
  */
-async function fetchBranchInventoryProgressive(
+export async function fetchBranchInventoryProgressive(
   branchIds: string[],
   appendToCache: (rows: EnrichedBranchItem[]) => void,
+  opts: { signal?: AbortSignal; maxRows?: number } = {},
 ): Promise<EnrichedBranchItem[]> {
   if (branchIds.length === 0) return [];
+  const { signal, maxRows } = opts;
 
   // Page 1 — render-critical.
-  const { data: firstRaw, error: firstErr } = await supabase
+  const { data: firstRaw, error: firstErr } = await withSignal(supabase
     .from('branch_items')
     .select('id, medicine_id, branch_id, owner_id, selling_price, purchase_price, quantity, expiry_date')
     .in('branch_id', branchIds)
     .order('created_at', { ascending: false })
-    .range(0, FIRST_PAGE_SIZE - 1);
+    .range(0, FIRST_PAGE_SIZE - 1), signal);
   if (firstErr) throw firstErr;
   if (!firstRaw || firstRaw.length === 0) return [];
 
-  const firstEnriched = await enrichItems(firstRaw);
+  const firstEnriched = await enrichItems(firstRaw, signal);
   appendToCache(firstEnriched);
 
   // If first page wasn't full, we're done.
@@ -144,15 +150,16 @@ async function fetchBranchInventoryProgressive(
   const all: EnrichedBranchItem[] = [...firstEnriched];
   let offset = FIRST_PAGE_SIZE;
   while (true) {
-    const { data: pageRaw, error } = await supabase
+    if (maxRows !== undefined && all.length >= maxRows) break;
+    const { data: pageRaw, error } = await withSignal(supabase
       .from('branch_items')
       .select('id, medicine_id, branch_id, owner_id, selling_price, purchase_price, quantity, expiry_date')
       .in('branch_id', branchIds)
       .order('created_at', { ascending: false })
-      .range(offset, offset + NEXT_PAGE_SIZE - 1);
+      .range(offset, offset + NEXT_PAGE_SIZE - 1), signal);
     if (error) throw error;
     if (!pageRaw || pageRaw.length === 0) break;
-    const enriched = await enrichItems(pageRaw);
+    const enriched = await enrichItems(pageRaw, signal);
     all.push(...enriched);
     appendToCache(enriched);
     if (pageRaw.length < NEXT_PAGE_SIZE) break;
@@ -162,14 +169,18 @@ async function fetchBranchInventoryProgressive(
 }
 
 
-async function fetchActiveIngredients(medicineIds: string[]) {
+/** Medicine IDs exactly as the page derives them for its ingredients query. */
+export const inventoryMedicineIds = (items: Array<{ medicine_id?: string }>) =>
+  [...new Set(items.map((i) => (i as any).medicine_id))] as string[];
+
+export async function fetchActiveIngredients(medicineIds: string[], signal?: AbortSignal) {
   if (medicineIds.length === 0) return {} as Record<string, Array<{ ingredient_name: string; strength: string | null }>>;
   const { data } = await chunkedInPartial<any>(medicineIds, (ids) =>
-    (supabase as any)
+    withSignal((supabase as any)
       .from('medicine_active_ingredients')
       .select('medicine_id, ingredient_name, strength, sort_order')
       .in('medicine_id', ids)
-      .order('sort_order')
+      .order('sort_order'), signal)
   );
   const ingMap: Record<string, Array<{ ingredient_name: string; strength: string | null }>> = {};
   data.forEach((i: any) => {
@@ -224,7 +235,7 @@ export function useBranchInventory() {
 
   // Background ingredients fetch — does not block list rendering.
   const medicineIds = useMemo(
-    () => [...new Set((query.data ?? []).map((i) => (i as any).medicine_id))] as string[],
+    () => inventoryMedicineIds(query.data ?? []),
     [query.data]
   );
 

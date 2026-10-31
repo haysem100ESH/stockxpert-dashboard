@@ -23,6 +23,7 @@ import SupplierAnalytics from './SupplierAnalytics';
 import SupplierIntelligenceDashboard from './SupplierIntelligenceDashboard';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { useReadOnly } from '@/hooks/useReadOnly';
+import { withSignal } from '@/lib/offline/readCache';
 
 interface Supplier {
   id: string;
@@ -33,6 +34,33 @@ interface Supplier {
   address?: string;
   created_at: string;
   offlineBadge?: string;
+}
+
+/**
+ * Shared with offline preparation: the supplier list for the viewed scope plus debts.
+ * `suppliers: null` means an owner with no branches (nothing is requested).
+ */
+export async function fetchSupplierList(
+  scope: { selectedBranch: string | null; role?: string; branchId?: string | null; ownerBranchIds: string[] },
+  signal?: AbortSignal,
+): Promise<{ suppliers: Supplier[] | null; debtMap: Record<string, number> }> {
+  let query = supabase.from('suppliers').select('*').order('name');
+  if (scope.selectedBranch) {
+    query = query.eq('branch_id', scope.selectedBranch);
+  } else if (scope.role === 'owner') {
+    if (scope.ownerBranchIds.length === 0) return { suppliers: null, debtMap: {} };
+    query = query.in('branch_id', scope.ownerBranchIds);
+  } else if (scope.branchId) {
+    query = query.eq('branch_id', scope.branchId);
+  }
+  const { data, error } = await withSignal(query, signal);
+  if (error) throw error;
+
+  // Fetch debts
+  const { data: debts } = await withSignal(supabase.from('supplier_debts').select('supplier_id, total_debt'), signal);
+  const debtMap: Record<string, number> = {};
+  for (const d of debts || []) debtMap[d.supplier_id] = Number(d.total_debt);
+  return { suppliers: data || [], debtMap };
 }
 
 export default function SupplierManagement() {
@@ -80,23 +108,9 @@ export default function SupplierManagement() {
 
   const fetchSuppliers = async () => {
     try {
-      let query = supabase.from('suppliers').select('*').order('name');
-      if (selectedBranch) {
-        query = query.eq('branch_id', selectedBranch);
-      } else if (profile?.role === 'owner') {
-        if (ownerBranchIds.length === 0) { setSuppliers([]); setLoading(false); return; }
-        query = query.in('branch_id', ownerBranchIds);
-      } else if (profile?.branch_id) {
-        query = query.eq('branch_id', profile.branch_id);
-      }
-      const { data, error } = await query;
-      if (error) throw error;
-      setSuppliers(data || []);
-
-      // Fetch debts
-      const { data: debts } = await supabase.from('supplier_debts').select('supplier_id, total_debt');
-      const debtMap: Record<string, number> = {};
-      for (const d of debts || []) debtMap[d.supplier_id] = Number(d.total_debt);
+      const { suppliers: list, debtMap } = await fetchSupplierList({ selectedBranch, role: profile?.role, branchId: profile?.branch_id, ownerBranchIds });
+      if (!list) { setSuppliers([]); setLoading(false); return; }
+      setSuppliers(list);
       setSupplierDebts(debtMap);
     } catch {
       toast({ title: "Error", description: "Failed to fetch suppliers", variant: "destructive" });

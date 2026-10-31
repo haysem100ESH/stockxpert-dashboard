@@ -12,7 +12,15 @@ import { clearUserDeviceData } from '@/lib/offline/deviceSafety';
 import { withPosLock } from '@/lib/offline/network';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
-import { setReadUser } from '@/lib/offline/readCache';
+import { setReadUser, withSignal } from '@/lib/offline/readCache';
+
+/** Shared by sign-in hydration and offline preparation: same request, same cached fields. */
+export const fetchProfileRow = (id: string, signal?: AbortSignal) =>
+  withSignal(supabase.from('profiles').select('*').eq('id', id).single(), signal);
+export async function cacheProfileMeta(id: string, data: Record<string, unknown>) {
+  const { full_name, role, branch_id, pharmacy_name, active, manually_deactivated } = data;
+  await cacheMeta(`profile:${id}`, { id, full_name, role, branch_id, pharmacy_name, active, manually_deactivated });
+}
 
 interface Profile {
   id: string;
@@ -70,14 +78,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 5000);
           try {
-            const { data, error } = await supabase.from('profiles').select('*').eq('id', id).single().abortSignal(controller.signal);
+            const { data, error } = await fetchProfileRow(id, controller.signal);
             if (error) {
               // Only connection failures use the cached profile, never access denials.
               if (!error.code || error.message?.includes('fetch') || controller.signal.aborted) nextProfile = await readMeta<CachedProfile>(`profile:${id}`) ?? null;
             } else if (data) {
               nextProfile = data;
-              const { full_name, role, branch_id, pharmacy_name, active, manually_deactivated } = data;
-              await cacheMeta(`profile:${id}`, { id, full_name, role, branch_id, pharmacy_name, active, manually_deactivated });
+              await cacheProfileMeta(id, data);
             }
           } catch { nextProfile = await readMeta<CachedProfile>(`profile:${id}`) ?? null; }
           finally { clearTimeout(timer); }

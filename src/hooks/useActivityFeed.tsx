@@ -2,6 +2,7 @@ import { useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { useActivitySnapshot } from './useActivitySnapshot';
+import { withSignal } from '@/lib/offline/readCache';
 
 export interface ActivityRow {
   client_txn_id?: string | null;
@@ -29,40 +30,52 @@ interface Options {
   ownerScope?: boolean;     // owner sees all under their owner_id
 }
 
+export type ActivityFeedOptions = Options;
+/** Date window exactly as the feed computes it (single day = local midnight to next midnight). */
+export function activityFeedRange(options: Options): { from: Date; to: Date } | null {
+  if (options.from && options.to) return { from: options.from, to: options.to };
+  if (options.date) {
+    const start = new Date(options.date); start.setHours(0,0,0,0);
+    const end = new Date(start); end.setDate(end.getDate()+1);
+    return { from: start, to: end };
+  }
+  return null;
+}
+/** Snapshot scope; shared with offline preparation so saved feeds are found by the page. */
+export function activityFeedScope(userId: string | undefined, options: Options) {
+  const range = activityFeedRange(options);
+  return `feed:${JSON.stringify([options.userId ?? (options.ownerScope ? 'owner' : userId), options.branchId, options.ownerScope, options.limit ?? 200, range?.from.toISOString(), range?.to.toISOString()])}`;
+}
+/** Shared with offline preparation (pass a bound `signal`). */
+export async function loadActivityFeed(userId: string, options: Options, signal?: AbortSignal): Promise<ActivityRow[]> {
+  let q = (supabase as any).from('activity_log').select('*').order('created_at', { ascending: false }).limit(options.limit ?? 200);
+
+  if (options.userId) q = q.eq('user_id', options.userId);
+  else if (!options.ownerScope) q = q.eq('user_id', userId);
+
+  if (options.branchId) q = q.eq('branch_id', options.branchId);
+
+  const range = activityFeedRange(options);
+  if (range) {
+    q = q.gte('created_at', range.from.toISOString()).lt('created_at', range.to.toISOString());
+  }
+
+  const { data, error } = await withSignal(q, signal);
+  if (error) throw error;
+  return (data || []) as ActivityRow[];
+}
+
 export function useActivityFeed(options: Options = {}) {
   const { profile, user } = useAuth();
 
-  const computeRange = useCallback(() => {
-    if (options.from && options.to) return { from: options.from, to: options.to };
-    if (options.date) {
-      const start = new Date(options.date); start.setHours(0,0,0,0);
-      const end = new Date(start); end.setDate(end.getDate()+1);
-      return { from: start, to: end };
-    }
-    return null;
-  }, [options.from, options.to, options.date]);
+  const computeRange = useCallback(() => activityFeedRange({ from: options.from, to: options.to, date: options.date }), [options.from, options.to, options.date]);
 
   const load = useCallback(async (): Promise<ActivityRow[]> => {
     if (!user) return [];
-    let q = (supabase as any).from('activity_log').select('*').order('created_at', { ascending: false }).limit(options.limit ?? 200);
-
-    if (options.userId) q = q.eq('user_id', options.userId);
-    else if (!options.ownerScope) q = q.eq('user_id', user.id);
-
-    if (options.branchId) q = q.eq('branch_id', options.branchId);
-
-    const range = computeRange();
-    if (range) {
-      q = q.gte('created_at', range.from.toISOString()).lt('created_at', range.to.toISOString());
-    }
-
-    const { data, error } = await q;
-    if (error) throw error;
-    return (data || []) as ActivityRow[];
+    return loadActivityFeed(user.id, { userId: options.userId, branchId: options.branchId, ownerScope: options.ownerScope, limit: options.limit, ...computeRange() });
   }, [user, options.userId, options.branchId, options.ownerScope, options.limit, computeRange]);
 
-  const range = computeRange();
-  const scope = `feed:${JSON.stringify([options.userId ?? (options.ownerScope ? 'owner' : user?.id), options.branchId, options.ownerScope, options.limit ?? 200, range?.from.toISOString(), range?.to.toISOString()])}`;
+  const scope = activityFeedScope(user?.id, options);
   const snapshot = useActivitySnapshot<ActivityRow[]>(user?.id, scope, [], load);
   const { data: rows, loading, setData: setRows } = snapshot;
 
