@@ -5,6 +5,7 @@
 - [ ] Offline receive/adjust controls, cached permission and suppliers
 - [ ] Stock resolution, activity, backup/export coverage
 - [ ] Full Bun suite and automatic build; document report and verification limitations
+- [ ] Finish isolated Edit Batch/offline adjustment render regression and Phase 3 procedures (current request)
 
 ## Offline records Phase 2
 - [x] Durable ops, shared ordered sync, chaining and overlay
