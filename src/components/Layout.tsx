@@ -28,6 +28,7 @@ import { useOfflineStatus } from '@/lib/offline/store';
 import OfflineStatusBadge from '@/components/sales/OfflineStatusBadge';
 import { Card, CardContent } from '@/components/ui/card';
 import OfflineReadGuard from '@/components/offline/OfflineReadGuard';
+import OfflinePrepareIndicator from '@/components/offline/OfflinePrepareIndicator';
 import { offlineRouteMode, NEEDS_INTERNET_PAGE } from '@/lib/offline/offlinePages';
 import { markOffline, resetReadStatus } from '@/lib/offline/readCache';
 import { useQueryClient } from '@tanstack/react-query';
@@ -168,6 +169,7 @@ function LayoutHeader({ profile, user, onSignOut }: { profile: any, user: any, o
         <SidebarTrigger className="ml-0" />
         <OfflineStatusBadge />
         <StorageBackupIndicators />
+        <OfflinePrepareIndicator />
         
         {/* Branch Selector for Owners */}
         {profile?.role === 'owner' && (

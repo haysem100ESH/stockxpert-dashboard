@@ -14,6 +14,15 @@ import type { RpcResult } from '@/lib/offline/types';
 import { supabase } from '@/lib/db';
 import { syncOp, recoverUserOps, dependencyReady, settleOp } from '@/lib/offline/syncOp';
 import type { OpResult } from '@/lib/offline/opTypes';
+import { markPrepareDirty, opDatasets, SALE_DATASETS } from '@/lib/offline/prepareEngine';
+
+/** Re-prepare offline data touched by this user's own confirmed changes (best effort, never blocks sync). */
+const preparedSaleChanged = (userId: string, branchId: string) =>
+  void markPrepareDirty(userId, SALE_DATASETS, [branchId, 'owner-all']).catch(() => undefined);
+const preparedOpChanged = (userId: string, entityType: string, branchId: string) => {
+  const { datasets, ownerWide } = opDatasets(entityType);
+  void markPrepareDirty(userId, datasets, ownerWide ? undefined : [branchId, 'owner-all']).catch(() => undefined);
+};
 
 export function useOfflineSync() {
   const { user } = useAuth();
@@ -63,6 +72,7 @@ export function useOfflineSync() {
                 resolution = { ...reply.data, duplicate: true } as RpcResult;
               }
               await settleSale(record, resolution);
+              if (resolution.status === 'synced') preparedSaleChanged(userId, record.branchId);
               try {
                 const rows = await fetchCatalog([record.branchId], userId);
                 await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([record.branchId], userId, rows));
@@ -76,6 +86,7 @@ export function useOfflineSync() {
             if (!error && data && ['applied', 'voided'].includes(data.status)) {
               await settleOp(op, { ...data, updated_at: data.result?.updated_at ?? data.updated_at,
                 resolution_note: data.resolution_note ?? data.result?.resolution_note } as OpResult);
+              if (data.status === 'applied') preparedOpChanged(userId, op.entityType, op.branchId);
               if (data.status === 'applied' && op.entityType === 'stock') {
                 try { const rows = await fetchCatalog([op.branchId], userId); await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([op.branchId], userId, rows)); } catch { /* Keep settled snapshot. */ }
               }
@@ -95,6 +106,7 @@ export function useOfflineSync() {
               setOfflineState({ connection: 'syncing' });
               const result = await syncOp(op);
               if (result?.status === 'applied') {
+                preparedOpChanged(userId, op.entityType, op.branchId);
                 if (op.entityType === 'stock') {
                   try { const rows = await fetchCatalog([op.branchId], userId); await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([op.branchId], userId, rows)); } catch { /* Keep settled snapshot. */ }
                 }
@@ -114,6 +126,7 @@ export function useOfflineSync() {
             }
             if (result.status === 'synced') {
               await saleEffects(record, result);
+              preparedSaleChanged(userId, record.branchId);
               try {
                 const rows = await fetchCatalog([record.branchId], userId);
                 await offlineDb.transaction('rw', offlineDb.catalog, offlineDb.meta, () => replaceCatalog([record.branchId], userId, rows));

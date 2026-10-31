@@ -40,14 +40,16 @@ export const bypassReadCache = (signal: AbortSignal) => { bypass.add(signal); };
  */
 export interface PrepareBinding {
   userId: string; scopeKey: string;
+  /** False for datasets whose offline copy lives in `meta` (access data, Activity snapshots). */
+  saveReads: boolean;
   /** One promise per successful response: true once durably saved, false if refused (too large, user changed). */
   writes: Promise<boolean>[];
   /** Latest outcome per request; a retried request that later succeeds clears its failure. */
   outcomes: Map<string, { ok: boolean; status?: number; rows?: number }>;
 }
 const bindings = new WeakMap<AbortSignal, PrepareBinding>();
-export function bindPrepare(signal: AbortSignal, userId: string, scopeKey: string): PrepareBinding {
-  const binding: PrepareBinding = { userId, scopeKey, writes: [], outcomes: new Map() };
+export function bindPrepare(signal: AbortSignal, userId: string, scopeKey: string, saveReads = true): PrepareBinding {
+  const binding: PrepareBinding = { userId, scopeKey, saveReads, writes: [], outcomes: new Map() };
   bindings.set(signal, binding);
   return binding;
 }
@@ -334,7 +336,7 @@ async function preparedFetch(base: FetchLike, binding: PrepareBinding, input: Re
   let res: Response;
   try { res = await base(input, init); }
   catch (err) { binding.outcomes.set(outcomeKey, { ok: false }); throw err; }
-  if (!res.ok || !req) { binding.outcomes.set(outcomeKey, { ok: res.ok, status: res.status }); return res; }
+  if (!res.ok || !req || !binding.saveReads) { binding.outcomes.set(outcomeKey, { ok: res.ok, status: res.status }); return res; }
   const copy = res.clone();
   const request = req;
   binding.writes.push((async () => {
