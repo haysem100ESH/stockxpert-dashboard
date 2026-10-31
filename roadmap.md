@@ -1,11 +1,12 @@
 # Offline POS — part 1
 
 ## Offline stock Phase 3
-- [ ] Extend existing operations, dependencies and shared stock overlay
-- [ ] Offline receive/adjust controls, cached permission and suppliers
-- [ ] Stock resolution, activity, backup/export coverage
-- [ ] Full Bun suite and automatic build; document report and verification limitations
-- [ ] Finish isolated Edit Batch/offline adjustment render regression and Phase 3 procedures (current request)
+- [x] Extend existing operations, dependencies and shared stock overlay
+- [x] Offline receive/adjust controls, cached permission and suppliers; purchases/payments remain online-only
+- [x] Stock resolution, activity, backup/export coverage; force limited to Write off what's left / Receive without supplier; NOT_FOUND void-only
+- [x] Full Bun suite: 207 pass, 0 fail, 678 expect calls across 18 files; automatic preview build OK (2026-10-31T06:27:04Z); no device verification
+- [x] Isolated Edit Batch/offline adjustment render regression: absolute save blocked, delta queued through OfflineStockDialog; no online form changes
+- [x] Phase 3 procedures document receipts, deltas, dependencies, shared stock, retained stale read cache, recovery labels and verification limits
 
 ## Offline records Phase 2
 - [x] Durable ops, shared ordered sync, chaining and overlay

@@ -263,3 +263,51 @@ Updated:
 - `AGENTS.md`, `roadmap.md`, `OFFLINE_POS.md`; project memory adds the owner-approved offline field scope.
 
 Protected client and all backend files/settings unchanged. Existing online mutation paths remain intact; reads include server updated_at for safe offline edits.
+
+## Offline stock Phase 3
+
+Frontend-only extension of the existing `ops` outbox and POS-locked sync loop. No second queue, migrations, SQL, RLS changes, function deployments or protected client changes. Existing online Add Batch/Edit Batch and stock adjustment paths remain in place.
+
+### Receive stock and delta adjustments
+
+- Staff and owner Inventory use the shared inventory controls. Offline **Receive stock** and **Adjust stock** require previously verified inventory edit permission and allowed branch access. Read-only permission does not allow these saves.
+- **Receive stock** applies to an existing item and generates a batch ID on the device. Fields include quantity (1–1,000,000), selling price, optional purchase price, expiry date, batch number, supplier, low-stock threshold and expiry-alert days. Expiry must be a valid date on or after the device's current Addis Ababa date.
+- **Adjust stock** targets a batch, including a locally received batch, or an item without batches. Enter a signed, nonzero delta with magnitude at most 1,000,000. Damage and expired write-offs must decrease stock; count correction and other require a note. Local validation refuses reductions beyond available device stock.
+- The offline form saves with **Save on this device** and states **Not yet confirmed by server**. Pending batches and adjustment badges also appear in the item's batch list. Absolute-quantity edits in the existing batch editor cannot be saved offline; use delta adjustments instead. Other inventory writes remain internet-only.
+- Suppliers may be selected from cached records or this cashier's locally pending supplier creates. **Supplier purchase/payment is not recorded offline — record it online if needed.** Supplier purchases, payments, debt and expense entries remain online-only.
+
+### Dependencies, stock and refresh
+
+Dexie version **5** retains the existing tables and adds optional stock-operation fields and `dependsOn: opId[]`. A receipt referencing a local supplier waits for that supplier; an adjustment referencing a locally received batch waits for its receipt. Earlier same-entity operations also remain dependencies. Missing, needs-attention or discarded predecessors block sending with `DEPENDS_ON_UNSYNCED`; resolve the predecessor before retrying. Retries keep original operation IDs, payloads and device timestamps.
+
+Shared stock on this PC, within the same branch/item, is:
+
+```text
+cached snapshot + unresolved receipts + unresolved signed adjustments
+                - unresolved sale base quantities
+```
+
+Pending, syncing and needs-attention work contributes across all cashiers. Discarded, voided and synced work does not contribute again. Sellable availability excludes expired batches/receipts using the Addis date; batch-level sales reservations follow FEFO. Non-expired receipts are available to offline sales. Lists, activity, exports, backups and sync remain private to the signed-in cashier despite physical stock being shared.
+
+Applied stock work settles once into the Sales catalog snapshot and triggers catalog refresh. A repeated result does not apply the delta again. Affected `branch_items` and `inventory_batches` shared read-cache entries are **marked stale, not deleted**: immediate refresh is not guaranteed for inactive views, so saved Inventory remains readable offline. Synced operations leave the provisional overlay. Until a successful online read replaces a stale snapshot, that view may still show its previous saved quantities; the next successful read clears the stale flag. Saved snapshots are not silently amended.
+
+### Recovery, activity and backup
+
+- Device **Waiting to sync → Records** labels stock work as receive/adjust operations. Server conflicts show **Waiting for owner review**. Device-only refused work allows unchanged Retry or Discard with a required note; never recreate an uncertain operation with a new ID.
+- Owner **Sync issues → Records** remains online-only and server-authorized. `NEGATIVE_STOCK` offers **Write off what's left**; `SUPPLIER_NOT_FOUND` offers **Receive without supplier**. `NOT_FOUND` is **void-only**. Other stock errors do not offer a force action. Void requires a note; the server determines the outcome.
+- Server processing owns stock history and activity: no client activity is logged for applied stock operations. Private provisional `receive_stock` / `adjust_stock` rows deduplicate against server operation IDs and never advance goals.
+- Existing backup/export format v2 includes stock operations and dependencies; same-user restore preserves IDs and payloads. Normal sign-out keeps them. Explicit device retirement still requires current export coverage and removes only the current user's data.
+
+### Final automated verification
+
+- Full `bun test`: **207 passed, 0 failed, 678 expect() calls across 18 files**. Final failures: none. The isolated DOM fixture additionally uses Node assertions, which are not included in Bun's expect count.
+- The added isolated happy-dom regression renders the actual batch editor under the offline guard, changes an absolute quantity, and verifies Save Batch Changes is blocked without any server call or queued work. It then renders the actual StockAdjustmentDialog offline, submits a -2 damage delta through OfflineStockDialog, and verifies exactly one `stock.adjust` enqueue, the saved callback and no online writes. Online forms were not modified.
+- Existing stock tests cover allowlists, Addis-date validation, supplier/receipt dependencies, shared stock, expired receipts, idempotent settlement, stale cache, reason/force labels, permission gates, activity deduplication, backup/restore and version-5 close/reopen persistence. The persistence check is not a simulated migration from an actual version-4 database.
+- Latest automatic preview check: **build OK (2026-10-31T06:27:04Z)**. No manual build or typecheck was run for these test/documentation-only changes; the preview harness performs those checks.
+- No device, installed-app, authenticated server, owner reconciliation or real backup-folder verification is claimed.
+
+### Files changed for the remaining steps
+
+- `src/test/offlineStockFormsRender.tsx` (isolated actual-form DOM regression)
+- `src/components/inventory/OfflineStockForms.test.ts` (Bun wrapper)
+- `OFFLINE_POS.md`, `roadmap.md` (Phase 3 procedures and verification)
